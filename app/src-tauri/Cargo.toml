@@ -1,0 +1,23 @@
+[package]
+name = "pnpflow-app"
+version = "0.1.0"
+description = "pnpflow desktop app: model builder and results viewer for PNP + flow"
+edition = "2021"
+publish = false
+
+# UNBUILT: written on a machine without the Rust toolchain / webkit2gtk headers.
+# See app/README.md for the prerequisites and the first-build checklist.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+regex = "1"
+
+[profile.release]
+opt-level = 3
+lto = true

@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pnpflow progress summary</title>
+<style>
+/* Tokens from DESIGN.md (dark default, light when the OS prefers light) */
+:root {
+  --font: Inter, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --bg: #0d1016; --surface: #141922; --raised: #1a202b; --hover: #212836;
+  --border: #252c39; --border-strong: #343d4e;
+  --text: #dfe5ee; --dim: #8b96a8; --faint: #5d6778;
+  --accent: #5cb8ff; --accent-ink: #06121f; --accent-soft: rgba(92,184,255,.13);
+  --ok: #51cf66; --warn: #fcc419; --bad: #ff6b6b; --info: #74c0fc;
+  --figure-bg: #ffffff;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f5f8; --surface: #ffffff; --raised: #f7f8fa; --hover: #edf0f5;
+    --border: #dde2ea; --border-strong: #c7cfdb;
+    --text: #1c2330; --dim: #5d6879; --faint: #98a2b2;
+    --accent: #0b6fd0; --accent-ink: #ffffff; --accent-soft: rgba(11,111,208,.09);
+    --ok: #2b8a3e; --warn: #9a6c00; --bad: #d6336c; --info: #1c7ed6;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f3f5f8; --surface: #ffffff; --raised: #f7f8fa; --hover: #edf0f5;
+  --border: #dde2ea; --border-strong: #c7cfdb;
+  --text: #1c2330; --dim: #5d6879; --faint: #98a2b2;
+  --accent: #0b6fd0; --accent-ink: #ffffff; --accent-soft: rgba(11,111,208,.09);
+  --ok: #2b8a3e; --warn: #9a6c00; --bad: #d6336c; --info: #1c7ed6;
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; } }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 var(--font); font-variant-numeric: tabular-nums; }
+a { color: var(--accent); }
+code, .mono { font-family: var(--mono); font-size: 0.9em; }
+pre { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 5px; padding: 10px 12px; overflow-x: auto; margin: 8px 0 12px; }
+h1, h2, h3 { margin: 0; line-height: 1.25; }
+h1 { font-size: 22px; font-weight: 600; }
+h2 { font-size: 16px; font-weight: 600; }
+h3 { font-size: 14px; font-weight: 600; margin: 16px 0 6px; }
+p { margin: 0 0 10px; max-width: 78ch; }
+ul { margin: 0 0 10px; padding-left: 20px; max-width: 78ch; }
+li { margin: 2px 0; }
+.dim { color: var(--dim); }
+.small { font-size: 12.5px; }
+
+/* Shell: menu-bar-like header, left nav, panels */
+.top { position: sticky; top: 0; z-index: 5; background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; padding: 0 16px; height: 48px; }
+.top .name { font-weight: 600; }
+.top .sub { color: var(--dim); }
+.top .date { margin-left: auto; color: var(--dim); font-family: var(--mono); font-size: 12px; }
+.theme-btn { border: 1px solid var(--border-strong); background: var(--raised); color: var(--text); border-radius: 5px;
+  height: 28px; padding: 0 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.theme-btn:hover { background: var(--hover); }
+.theme-btn:focus-visible, .nav a:focus-visible, .shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); max-width: 1320px; margin: 0 auto; }
+.nav { position: sticky; top: 48px; align-self: start; height: calc(100vh - 48px); overflow-y: auto; padding: 16px 8px 24px 16px;
+  border-right: 1px solid var(--border); }
+.nav .grp { font-size: 11.5px; font-weight: 600; color: var(--dim); padding: 12px 8px 4px; }
+.nav a { display: block; text-decoration: none; color: var(--text); padding: 4px 8px; border-radius: 5px; font-size: 13px; }
+.nav a:hover { background: var(--hover); }
+.nav a.on { background: var(--accent-soft); color: var(--text); font-weight: 500; }
+main { padding: 16px 20px 60px; min-width: 0; }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .nav { display: none; }
+  main { padding: 12px 16px 48px; }
+  .top .sub { display: none; }
+}
+
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; scroll-margin-top: 64px; }
+.panel > header { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.panel > header .tag { margin-left: auto; }
+.panel > .body { padding: 14px 16px 6px; }
+.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; align-items: start; margin-bottom: 10px; }
+
+.tag { display: inline-block; font-size: 11.5px; font-weight: 500; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.tag.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.tag.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.tag.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.tag.info { color: var(--info); background: color-mix(in srgb, var(--info) 14%, transparent); }
+.tag.plain { color: var(--dim); background: var(--raised); }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 4px 0 12px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--dim); font-weight: 500; font-size: 12.5px; }
+td.num { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+.table-wrap { overflow-x: auto; }
+
+figure { margin: 0; }
+.shot { display: block; width: 100%; padding: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--figure-bg);
+  cursor: zoom-in; overflow: hidden; }
+.shot img { display: block; width: 100%; height: auto; max-height: 560px; object-fit: contain; }
+.shot.app { background: var(--bg); }
+.shot.app img { max-height: none; }
+figcaption { font-size: 12.5px; color: var(--dim); margin-top: 6px; }
+
+/* Pipeline */
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 6px 0 14px; counter-reset: s; }
+.flow div { border: 1px solid var(--border); border-radius: 5px; background: var(--raised); padding: 8px 10px; font-size: 12.5px; color: var(--dim); }
+.flow b { display: block; color: var(--text); font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+.arch { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 8px; align-items: center; margin: 6px 0 14px; }
+.arch .box { border: 1px solid var(--border); border-radius: 5px; background: var(--raised); padding: 10px 12px; font-size: 12.5px; color: var(--dim); }
+.arch .box b { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; }
+.arch .arr { font-family: var(--mono); font-size: 11.5px; color: var(--dim); text-align: center; }
+@media (max-width: 760px) { .arch { grid-template-columns: 1fr; } }
+
+.pending { border: 1px dashed var(--border-strong); border-radius: 5px; padding: 18px; color: var(--dim); text-align: center; }
+
+dialog { border: 1px solid var(--border-strong); border-radius: 8px; padding: 0; background: var(--surface); max-width: 94vw; max-height: 92vh; }
+dialog::backdrop { background: rgba(5, 8, 12, .7); }
+dialog img { display: block; max-width: 94vw; max-height: 86vh; background: #fff; }
+dialog p { margin: 0; padding: 8px 12px; font-size: 12.5px; color: var(--dim); }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <span class="name">pnpflow</span><span class="sub">progress summary</span>
+  <span class="date">2026-11-22</span>
+  <button class="theme-btn" id="theme" type="button">Toggle theme</button>
+</div>
+
+<div class="layout">
+<nav class="nav" aria-label="Panels">
+  <div class="grp">Overview</div>
+  <a href="#glance">At a glance</a>
+  <a href="#how">How it works</a>
+  <div class="grp">Example</div>
+  <a href="#sphere">Charged sphere</a>
+  <a href="#mesh">Mesh check</a>
+  <a href="#validation">Validation</a>
+  <a href="#status">Live status</a>
+  <div class="grp">App</div>
+  <a href="#ui">Desktop app</a>
+  <a href="#design">Design + agents</a>
+  <div class="grp">Use</div>
+  <a href="#run">How to run</a>
+  <a href="#next">Next steps</a>
+  <a href="#log">What was done</a>
+</nav>
+
+<main>
+
+<section class="panel" id="glance">
+  <header><h1>At a glance</h1></header>
+  <div class="body">
+    <p>pnpflow is a finite-element program for electrochemical systems: Poisson–Nernst–Planck ion
+      transport, optionally coupled to fluid flow. The goal is that an electrochemist can model their own
+      cell, electrode or pore without writing code. The solver is Python + JAX; the desktop app will be Rust (Tauri 2)
+      with a web front end.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Part</th><th>State</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td>Solver: PNP + Stokes/Navier–Stokes, exact JAX Jacobians, adjoint sensitivities</td><td><span class="tag ok">working</span></td><td><code>pnpflow/</code></td></tr>
+        <tr><td>Axisymmetric (r–z) coordinates, for Poisson and ion transport</td><td><span class="tag ok">new, validated</span></td><td><code>fem.py</code>, <code>model.py</code></td></tr>
+        <tr><td>Charged-sphere example (Poisson only)</td><td><span class="tag ok">new, validated</span></td><td><code>cases.py</code> → <code>charged_sphere</code></td></tr>
+        <tr><td>Two-view mesh render + mesh diagnose on every run</td><td><span class="tag ok">new</span></td><td><code>meshtools.py</code></td></tr>
+        <tr><td>House-style figures (cmasher, LaTeX, 300 dpi) on every run</td><td><span class="tag ok">new</span></td><td><code>figures.py</code></td></tr>
+        <tr><td>Live status: progress fraction, health, numbers behind it</td><td><span class="tag ok">new</span></td><td><code>progress.json</code></td></tr>
+        <tr><td>Desktop app front end (FreeCAD-style shell), runs in a browser</td><td><span class="tag ok">first version</span></td><td><code>app/</code></td></tr>
+        <tr><td>Tauri native window</td><td><span class="tag plain">scaffold only</span></td><td><code>app/src-tauri/</code> (cannot be built on this machine yet)</td></tr>
+        <tr><td>Agent protocol (MCP server)</td><td><span class="tag plain">specified</span></td><td><code>docs/MCP.md</code></td></tr>
+        <tr><td>Project file (no-code models)</td><td><span class="tag plain">planned</span></td><td><code>docs/PLAN.md</code> Phase 1</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<section class="panel" id="how">
+  <header><h2>How it works</h2></header>
+  <div class="body">
+    <h3>Three languages, each with one job</h3>
+    <div class="arch">
+      <div class="box"><b>Desktop app (Rust + JavaScript)</b>Window, menus, model tree, field viewer. Starts runs and watches them.</div>
+      <div class="arr">case / project →<br>← results/&lt;run&gt;/</div>
+      <div class="box"><b>run.py (Python)</b>Builds the mesh, solves, analyses, writes result files.</div>
+      <div class="arr">calls</div>
+      <div class="box"><b>JAX core</b>Weak form, exact Jacobians by <code>jacfwd</code>, Newton, adjoint sensitivities.</div>
+    </div>
+    <p class="dim small">The app and the solver only share files (<code>docs/DATA_FORMAT.md</code>), so an AI agent can drive the
+      solver through the same files (<code>docs/MCP.md</code>). The <code>.js</code> files are JavaScript, the language
+      of the app's web view, not Java.</p>
+
+    <h3>What happens in one run</h3>
+    <div class="flow">
+      <div><b>1 · Geometry</b>gmsh (OCC) builds shapes and names every boundary.</div>
+      <div><b>2 · Mesh</b>Curved P2 triangles, refined where the physics is sharp.</div>
+      <div><b>3 · Mesh check</b>Two views + diagnose, written before solving.</div>
+      <div><b>4 · Weak form</b>One JAX function per element; edges for natural BCs.</div>
+      <div><b>5 · Jacobian</b><code>jax.jacfwd</code>, exact, assembled sparse.</div>
+      <div><b>6 · Newton</b>PARDISO solves, line search, continuation; live progress.</div>
+      <div><b>7 · Analysis</b>Fluxes, forces, profiles, adjoint dQ/dp, checks.</div>
+      <div><b>8 · Output</b>JSON for the app, figures, ParaView files.</div>
+    </div>
+    <h3>Equations (dimensionless, steady)</h3>
+<pre>species i :  div N_i = s_i,      N_i = c_i u − (d_i/Pe)(grad c_i + z_i c_i grad φ)
+Poisson   :  −δ² lap φ = ρ/ρ_n + s_φ,      ρ = Σ z_i c_i
+momentum  :  Re (u·grad) u = −grad p + lap u − K ρ grad φ     (optional)
+mass      :  div u = 0                                          (optional)</pre>
+    <p class="dim small">Axisymmetric runs weight every integral by r. That is exact for Poisson and Nernst–Planck; flow in r–z
+      needs extra terms, so the solver refuses that combination for now.</p>
+  </div>
+</section>
+
+<section class="panel" id="sphere">
+  <header><h2>Example: uniformly charged sphere</h2><span class="tag ok">matches the exact solution</span></header>
+  <div class="body">
+    <p>A sphere of radius R = 1 with uniform charge density q = 1, in a domain of radius 10, solving only
+      Poisson's equation, <code>−lap φ = q</code> inside and <code>0</code> outside. The model is axisymmetric: the solver
+      works on the half plane r ≥ 0 and the figures mirror it to show the whole sphere. The outer boundary uses the exact
+      far-field condition <code>dφ/dn = −φ/R_out</code>.</p>
+<pre>exact:  φ = qR²/2 − qρ²/6   (ρ ≤ R)        φ = qR³/(3ρ)   (ρ ≥ R),   ρ = √(r² + z²)</pre>
+    <div class="row">
+      <figure><button class="shot" type="button"><img src="summary_assets/sphere_phi.jpg" alt="Potential of the charged sphere, mirrored to a full disc" loading="lazy"></button>
+        <figcaption>Potential φ (cosmic colormap). Peak q R²/2 = 0.5 at the centre.</figcaption></figure>
+      <figure><button class="shot" type="button"><img src="summary_assets/sphere_E.jpg" alt="Electric field magnitude of the charged sphere" loading="lazy"></button>
+        <figcaption>|E|: grows linearly inside, peaks at the surface, falls as 1/ρ² outside.</figcaption></figure>
+    </div>
+    <figure style="max-width:620px"><button class="shot" type="button"><img src="summary_assets/sphere_profile_axis.jpg" alt="Potential along the axis compared with the exact solution" loading="lazy"></button>
+      <figcaption>Along the axis: computed φ (solid) on top of the exact curve (dashed).</figcaption></figure>
+    <h3>Checks written by the run</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Check</th><th>Value</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>max |φ − exact| / max φ (default mesh, 4,637 elements)</td><td class="num">3.7e-6</td><td><span class="tag ok">pass</span></td></tr>
+        <tr><td>same, mesh size halved (18,058 elements)</td><td class="num">5.3e-7</td><td><span class="tag ok">pass</span></td></tr>
+        <tr><td>Gauss: flux through the outer boundary vs enclosed charge</td><td class="num">9.8e-15</td><td><span class="tag ok">pass</span></td></tr>
+        <tr><td>Gauss: flux vs exact 4/3 π R³ q</td><td class="num">1.8e-8</td><td><span class="tag ok">pass</span></td></tr>
+        <tr><td>Solve</td><td class="num">1 Newton step, 1.3 s</td><td><span class="tag info">info</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="dim small">Halving the mesh size cuts the error about 7×, close to the h³ rate expected for quadratic elements.</p>
+  </div>
+</section>
+
+<section class="panel" id="mesh">
+  <header><h2>Mesh check: two views + diagnose</h2><span class="tag ok">all checks pass</span></header>
+  <div class="body">
+    <p>Every run now draws its mesh twice before solving: the whole domain with boundaries coloured by name, and a zoom
+      coloured by element quality. It also runs a diagnose pass and writes <code>mesh/diagnose.json</code>; every failure
+      comes with a suggested fix.</p>
+    <div class="row">
+      <figure><button class="shot" type="button"><img src="summary_assets/sphere_mesh_a.jpg" alt="Whole mesh with the axis and outer boundary coloured" loading="lazy"></button>
+        <figcaption>View A: the half domain, boundaries <code>axis</code> and <code>outer</code>, refined around the sphere.</figcaption></figure>
+      <figure><button class="shot" type="button"><img src="summary_assets/sphere_mesh_b.jpg" alt="Zoom on the mesh coloured by element quality" loading="lazy"></button>
+        <figcaption>View B: element quality, minimum 0.78 (1 = equilateral).</figcaption></figure>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Diagnose check</th><th>Sphere run</th><th>Fails when</th></tr></thead>
+      <tbody>
+        <tr><td>Unnamed / duplicate boundaries</td><td><span class="tag ok">pass</span></td><td>a boundary edge has no name, or two</td></tr>
+        <tr><td>BC coverage</td><td><span class="tag info">info</span> axis uses the natural (symmetry) condition</td><td>a condition names a missing boundary</td></tr>
+        <tr><td>Minimum quality</td><td class="num">0.78 <span class="tag ok">pass</span></td><td>&lt; 0.2 (warn &lt; 0.3)</td></tr>
+        <tr><td>Size jump between neighbours</td><td class="num">1.51 <span class="tag ok">pass</span></td><td>warn &gt; 2</td></tr>
+        <tr><td>Inverted / bad curved elements</td><td><span class="tag ok">pass</span></td><td>any Jacobian ≤ 0</td></tr>
+        <tr><td>Connected regions</td><td class="num">1 <span class="tag ok">pass</span></td><td>warn &gt; 1</td></tr>
+        <tr><td>Double-layer resolution</td><td><span class="tag info">n/a</span> no ions</td><td>&lt; 8 elements across 3 Debye lengths</td></tr>
+        <tr><td>Size budget</td><td class="num">30,687 dofs <span class="tag ok">pass</span></td><td>warn &gt; 2 million</td></tr>
+      </tbody>
+    </table></div>
+    <p class="dim small">Tested the other way too: a Gouy–Chapman mesh deliberately too coarse for its Debye length fails the
+      double-layer check (2.2 elements, limit 8) with the fix "lower h_wall to ≤ δ/8". Known issue: for the sphere,
+      view B zooms near the axis rather than the sphere surface, because the surface is an internal curve, not a named
+      boundary.</p>
+  </div>
+</section>
+
+<section class="panel" id="validation">
+  <header><h2>Validation</h2><span class="tag ok">5 / 5 pass</span></header>
+  <div class="body">
+    <div class="row">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Case</th><th>Compared with</th><th>Error</th></tr></thead>
+        <tbody>
+          <tr><td><code>gouy_chapman</code></td><td>exact planar double layer</td><td class="num">3.5e-6</td></tr>
+          <tr><td><code>eo_slit</code></td><td>electro-osmotic flow, nonlinear Poisson–Boltzmann</td><td class="num">2.3e-4</td></tr>
+          <tr><td><code>mms</code></td><td>manufactured solution, all terms and BC types</td><td class="num">2.1e-4</td></tr>
+          <tr><td><code>cylinder</code></td><td>Gauss balance, zero wall flux, symmetry</td><td class="num">1.8e-15</td></tr>
+          <tr><td><code>charged_sphere</code></td><td>exact sphere potential</td><td class="num">3.7e-6</td></tr>
+        </tbody>
+      </table>
+      <p class="dim small">The first three gave the same numbers before and after this round's changes, so axisymmetric support
+        did not disturb planar runs.</p></div>
+      <figure><button class="shot" type="button"><img src="summary_assets/gc_profile.jpg" alt="Ion concentrations and potential across the double layer" loading="lazy"></button>
+        <figcaption>Gouy–Chapman: a) ion concentrations, b) potential vs the exact solution, across the double layer.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="status">
+  <header><h2>Live status while solving</h2></header>
+  <div class="body">
+    <p>While it runs, the solver rewrites <code>progress.json</code>. The app reads it to draw the progress bar, the health badge
+      and a live residual plot. Progress is never made up: when it cannot be measured it is <code>null</code> and the bar
+      shows "unknown".</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>fraction</code></td><td>0–1 through the continuation stages, from finished stages plus how far the residual has fallen in the current one</td></tr>
+        <tr><td><code>health</code></td><td><span class="tag ok">converging</span> <span class="tag warn">struggling</span> (short line-search steps, halvings) <span class="tag bad">stalled</span> (no drop in 3 steps) <span class="tag bad">failed</span> <span class="tag ok">done</span></td></tr>
+        <tr><td><code>tells</code></td><td>the numbers behind the verdict: residual, contraction ratio, line-search step, minimum concentration, halvings</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+<section class="panel" id="ui">
+  <header><h2>Desktop app</h2><span class="tag ok">first version</span></header>
+  <div class="body">
+    <p>The layout follows your FreeCAD reference: menu bar, workbench tabs in the order the model is built
+      (Geometry → Mesh → Materials → Boundaries → Equations → Study → Results), model tree with a property editor
+      below it, document tabs and a status bar with live run state.</p>
+    <figure><button class="shot app" type="button"><img src="summary_assets/ui_start.jpg" alt="Start page with templates and recent runs" loading="lazy"></button>
+      <figcaption>Start page: templates (charged sphere first, with a preview and key parameters) and recent runs with real thumbnails and status.</figcaption></figure>
+    <div class="row" style="margin-top:14px">
+      <figure><button class="shot app" type="button"><img src="summary_assets/ui_sphere.jpg" alt="Results workbench showing the charged sphere potential" loading="lazy"></button>
+        <figcaption>Results workbench: the sphere mirrored about r = 0, model tree and parameters on the left, checks top right, run state in the status bar.</figcaption></figure>
+      <figure><button class="shot app" type="button"><img src="summary_assets/ui_mesh.jpg" alt="Mesh workbench with two mesh views and the diagnose table" loading="lazy"></button>
+        <figcaption>Mesh workbench: the two mesh views with what to look for, statistics and the diagnose checks.</figcaption></figure>
+    </div>
+    <figure style="max-width:620px"><button class="shot app" type="button"><img src="summary_assets/ui_sphere_light.jpg" alt="The same view in the light theme" loading="lazy"></button>
+      <figcaption>Light theme, used when the OS prefers light (or chosen in View).</figcaption></figure>
+    <h3>What works and what is a stub</h3>
+    <ul>
+      <li><b>Works:</b> menus (keyboard too), workbench tabs with status dots, toolbar with SVG icons and shortcut tooltips,
+        model tree, parameter editor, WebGL field map (zoom, pan, probe, contours, PNG export), profiles, checks, mesh views,
+        figure gallery, launching a run and watching it live (progress bars, health badge, residual plot, log).</li>
+      <li><b>Stubs until the project file exists:</b> editing in Geometry, Mesh, Materials, Boundaries and Equations; the
+        SI / dimensionless toggle (marked "preview").</li>
+      <li><b>Tauri:</b> the native shell is written in <code>app/src-tauri/</code> but has not been compiled.</li>
+    </ul>
+    <h3>Reference</h3>
+    <figure><button class="shot app" type="button"><img src="summary_assets/freecad_reference.jpg" alt="FreeCAD 1.1 start page in a dark theme" loading="lazy"></button>
+      <figcaption>Your FreeCAD 1.1 reference. Kept: the shell and Start page. Changed: one toolbar row with a single icon style,
+        stronger text contrast, real result thumbnails, live run state in the status bar (<code>docs/PLAN.md</code> §1).</figcaption></figure>
+  </div>
+</section>
+
+<section class="panel" id="design">
+  <header><h2>Design system and agent behaviour</h2></header>
+  <div class="body">
+    <ul>
+      <li><b>impeccable</b> design skill installed in the project (<code>.claude/skills/impeccable</code>). The app is an
+        "Operate" tool: one UI font, a restrained palette where the blue accent marks only actions, selection and progress,
+        and every control with all its states.</li>
+      <li><b><code>PRODUCT.md</code></b> (who it's for, principles) and <b><code>DESIGN.md</code></b> (colours, type, components)
+        carry the current HUD's colours and type, which you liked.</li>
+      <li><b>Figures</b> use your house style: LaTeX/Times, 24 pt, 300 dpi, no boxes (only the x and y axis lines, each
+        ending in an arrow), no colour-bar outline, panel labels a), b), and three cmasher maps only: cosmic (potential,
+        concentrations), ember (|E|, |u|), bubblegum (charge density). Never viridis.</li>
+      <li><b>Standing agent behaviour</b> for all your projects is in <code>~/.claude/CLAUDE.md</code>: autodiff for every
+        derivative, a validation case for every new term, live status, two-view mesh checks, figure style, impeccable rules,
+        and checking pages by rendering them.</li>
+      <li><b><code>AGENTS.md</code></b> explains this repo to any coding agent; <code>docs/MCP.md</code> specifies how an agent
+        builds a gmsh geometry, checks the mesh and runs the solver.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="panel" id="run">
+  <header><h2>How to run</h2></header>
+  <div class="body">
+    <p>From a Windows terminal (the solver runs in WSL):</p>
+<pre>cd C:\Users\Gnome\Desktop\VMBox\pnpflow
+wsl -d Debian -- bash tools/wsl_run.sh python run.py charged_sphere --name sphere_demo
+wsl -d Debian -- bash tools/wsl_run.sh python run.py --list           # all cases and parameters
+wsl -d Debian -- bash tools/wsl_run.sh bash tools/validate.sh         # all validation cases</pre>
+    <p>Results land in <code>results\sphere_demo\</code>: <code>figures\</code> (PNG) and <code>svg\</code>,
+      <code>mesh\view_a.png</code>, <code>mesh\view_b.png</code>, <code>summary.json</code> with every check.</p>
+    <p>To open the app (keep the terminal open while you use it):</p>
+<pre>wsl -d Debian -- bash tools/wsl_run.sh python app/server.py
+then open in a browser:
+  http://localhost:8766/                                          Start page
+  http://localhost:8766/?run=sphere_demo&amp;wb=results&amp;view=field    the charged sphere
+  http://localhost:8766/?new=charged_sphere                       new run from the template, F8 solves</pre>
+    <p class="dim small">New machines: <code>conda env create -f environment.yml</code> then <code>conda activate pnpflow</code>.</p>
+  </div>
+</section>
+
+<section class="panel" id="next">
+  <header><h2>Next steps</h2></header>
+  <div class="body">
+    <ul>
+      <li><b>Project file</b>: one JSON file per model, so new problems need no Python (<code>docs/PLAN.md</code> Phase 1).</li>
+      <li><b>MCP server</b>: let an agent build geometry, check the mesh, run and report (Phase 3).</li>
+      <li><b>Tauri build</b>: needs Rust + MSVC Build Tools on Windows (WebView2 is already there).</li>
+      <li><b>Physics</b>, in your order: applied potential/current and Butler–Volmer kinetics → chronoamperometry and CV →
+        EIS → homogeneous reactions → porous electrodes → 3D. Axisymmetric is done for Poisson and ion transport.</li>
+      <li><b>Small fixes</b>: zoom view B on the finest internal curve; draw the sphere outline in the app.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="panel" id="log">
+  <header><h2>What was done</h2></header>
+  <div class="body">
+    <div class="table-wrap"><table>
+      <thead><tr><th>Step</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Read the existing solver, docs and dashboard</td><td><code>AGENTS.md</code> describing how it works</td></tr>
+        <tr><td>Studied the impeccable design repo</td><td>Design rules, installed as a project skill</td></tr>
+        <tr><td>GUI question workbook</td><td><code>docs/ui_design.html</code>; your answers in <code>docs/ui_answers.md</code></td></tr>
+        <tr><td>Product and design context</td><td><code>PRODUCT.md</code>, <code>DESIGN.md</code></td></tr>
+        <tr><td>Python environment</td><td><code>environment.yml</code> (conda solve checked on Linux)</td></tr>
+        <tr><td>Agent protocol and build plan</td><td><code>docs/MCP.md</code>, <code>docs/PLAN.md</code> with the FreeCAD mapping</td></tr>
+        <tr><td>Standing behaviour for all projects</td><td><code>~/.claude/CLAUDE.md</code></td></tr>
+        <tr><td>Explained the languages</td><td>Python solver, JavaScript UI in the web view, Rust native shell (no Java)</td></tr>
+        <tr><td>Physics agent</td><td>Axisymmetric coordinates, <code>charged_sphere</code>, live status keys</td></tr>
+        <tr><td>Post-processing agent</td><td>Mesh views, diagnose, house-style figures, cmasher colormaps for the app</td></tr>
+        <tr><td>UI agent</td><td>FreeCAD-style app shell in <code>app/</code>, running in a browser</td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<dialog id="zoom" aria-label="Enlarged figure"><img alt=""><p></p></dialog>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  try { var t = localStorage.getItem("pnp-summary-theme"); if (t) root.dataset.theme = t; } catch (e) {}
+  document.getElementById("theme").addEventListener("click", function () {
+    var dark = root.dataset.theme ? root.dataset.theme === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("pnp-summary-theme", root.dataset.theme); } catch (e) {}
+  });
+
+  var dlg = document.getElementById("zoom");
+  document.querySelectorAll(".shot").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var img = b.querySelector("img");
+      dlg.querySelector("img").src = img.src;
+      dlg.querySelector("img").alt = img.alt;
+      var cap = b.parentElement.querySelector("figcaption");
+      dlg.querySelector("p").textContent = cap ? cap.textContent : "";
+      dlg.showModal();
+    });
+  });
+  dlg.addEventListener("click", function () { dlg.close(); });
+
+  var links = Array.prototype.slice.call(document.querySelectorAll(".nav a"));
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (!en.isIntersecting) return;
+      links.forEach(function (a) { a.classList.toggle("on", a.getAttribute("href") === "#" + en.target.id); });
+    });
+  }, { rootMargin: "-50% 0px -45% 0px" });
+  document.querySelectorAll(".panel").forEach(function (p) { obs.observe(p); });
+})();
+</script>
+</body>
+</html>

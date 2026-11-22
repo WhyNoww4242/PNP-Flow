@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pnpflow</title>
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='6.5' fill='%235cb8ff'/%3E%3Ccircle cx='16' cy='16' r='11.5' fill='none' stroke='%235cb8ff' stroke-width='1.8' stroke-dasharray='2.6 2.6'/%3E%3C/svg%3E">
+  <script>
+    // Resolve the theme before first paint: ?theme= override, then the saved choice, then the OS.
+    (function () {
+      var q = new URLSearchParams(location.search).get("theme");
+      var saved = null;
+      try { saved = JSON.parse(localStorage.getItem("pnpflow.theme")); } catch (e) {}
+      var pref = q || saved || "system";
+      var light = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+      document.documentElement.dataset.theme = pref === "system" ? (light ? "light" : "dark") : pref;
+    })();
+  </script>
+  <link rel="stylesheet" href="css/app.css">
+  <script src="vendor/plotly.min.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+<div id="app">
+  <header class="menubar" id="menubar">
+    <span class="brand" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="18" height="18"><circle cx="16" cy="16" r="6.5" class="brand-core"/><circle cx="16" cy="16" r="11.5" class="brand-ring"/></svg>
+    </span>
+    <nav class="menus" role="menubar" aria-label="Main menu" id="menus"></nav>
+    <span class="menubar-right">
+      <span class="conn" id="conn" role="status" aria-live="polite"><span class="conn-dot"></span><span class="conn-text">Connecting</span></span>
+    </span>
+  </header>
+
+  <nav class="wb-tabs" id="wb-tabs" role="tablist" aria-label="Workbenches (construction steps)"></nav>
+  <div class="toolbar" id="toolbar" role="toolbar" aria-label="Workbench tools"></div>
+
+  <div class="workspace" id="workspace">
+    <aside class="combo" id="combo" aria-label="Model">
+      <div class="combo-head"><span class="panel-title">Model</span><span class="combo-doc" id="combo-doc"></span></div>
+      <div class="tree" id="tree" role="tree" aria-label="Model tree"></div>
+      <div class="hsplit" id="hsplit" role="separator" aria-orientation="horizontal" aria-label="Resize property editor" tabindex="0"></div>
+      <section class="props" id="props" aria-label="Properties">
+        <div class="props-head"><span class="panel-title" id="props-title">Properties</span><span class="props-sub" id="props-sub"></span></div>
+        <div class="props-body" id="props-body"></div>
+      </section>
+      <div class="props-tabs" role="tablist" aria-label="Property editor">
+        <button class="ptab" id="ptab-view" role="tab" aria-selected="false" data-tab="view" title="Display settings of the canvas">View</button>
+        <button class="ptab" id="ptab-data" role="tab" aria-selected="true" data-tab="data" title="Parameters of the model">Data</button>
+      </div>
+    </aside>
+    <div class="vsplit" id="vsplit" role="separator" aria-orientation="vertical" aria-label="Resize model panel" tabindex="0"></div>
+    <main class="center" id="center">
+      <div class="canvas" id="canvas"></div>
+      <div class="doc-tabs" id="doc-tabs" role="tablist" aria-label="Open documents"></div>
+    </main>
+  </div>
+
+  <footer class="statusbar" id="statusbar">
+    <span class="sb-msg" id="sb-msg" role="status" aria-live="polite"></span>
+    <span class="sb-run" id="sb-run"></span>
+    <span class="sb-sep"></span>
+    <span class="sb-controls" id="sb-controls"></span>
+  </footer>
+</div>
+
+<div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+<div id="toasts" aria-live="polite"></div>
+<dialog class="dialog" id="help-dialog" aria-labelledby="help-title"></dialog>
+<dialog class="dialog" id="about-dialog" aria-labelledby="about-title"></dialog>
+<div class="lightbox hidden" id="lightbox"></div>
+</body>
+</html>

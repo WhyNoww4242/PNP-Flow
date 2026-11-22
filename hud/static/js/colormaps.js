@@ -1,0 +1,41 @@
+// Colormap lookup tables sampled from cmasher (64 stops, linearly interpolated).
+// Only cmasher maps: never viridis or other matplotlib defaults.
+const STOPS = {
+  "cosmic": "0000000101010302030604080a060e0f0814130b1b180e211d10282112302614372b163f2f17473419503819593d1a62431a6f48197a4c188551159155129e590dab5c07b85f04c56105d06110da5f1ce05d28e45a34e6563ee75248e74e50e6495ae54561e34168e23d6ee03975df357add3180dc2e86db2b8bda2890d92595d9229ad8209fd81da4d71ba9d718aed715b4d713b9d710bed70cc3d709c8d705cdd703d2d703d7d604ddd60ae2d513e7d51decd429f1d338f5d249fad05ffdd0",
+  "ember": "00000001010102020404040807070e0d0914120c1a180e1f1e11232413282a142c30162f3617333c1836431939491a3b511a3e581a405f1a42651a436c19457319457a18468116468815458f13459510439c0e42a30c40aa0a3db0093ab60b37bd1033c2152fc71b2bcc2227d02923d3301fd7381cda3f18dd4615df4c12e2530ee45a0be66107e86705ea6e03ec7402ed7d01ef8301f08a03f19005f29709f39d0df3a412f3ab16f4b11bf4b820f4bf25f3c529f3cc2ef2d333f2da39f1e13e",
+  "bubblegum": "0722380a243e0e264412284a162a501a2b571f2d5d232e64282f6b2c30723131793631803c318741318e4731954d309c542fa45a2ea9602caf662bb46d2ab87328bc7927bf7e26c28425c48a25c69025c79525c89b26c9a027c8a529c8aa2bc7b12ec6b530c4ba33c3bf37c1c33abfc73ebccb42bacf46b7d34ab5d74eb2da53afdd58ade05cabe261a9e566a7e76ba5e972a3eb77a2ed7ca1ee81a0f086a0f18ba0f390a0f495a0f59aa0f69fa1f7a4a1f8a9a2f9aea3fab3a4fbb8a5fcbda6",
+};
+export const DIVERGING = new Set();   // no diverging maps are used
+export const COLORMAP_NAMES = Object.keys(STOPS);
+
+/** Return a Uint8Array(256*4) RGBA lookup table for colormap `name`. */
+export function colormapLUT(name) {
+  const hex = STOPS[name] || STOPS.cosmic;
+  const n = hex.length / 6;
+  const stops = [];
+  for (let i = 0; i < n; i++) {
+    stops.push([0, 2, 4].map((o) => parseInt(hex.substr(i * 6 + o, 2), 16)));
+  }
+  const lut = new Uint8Array(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = (i / 255) * (n - 1);
+    const a = Math.min(Math.floor(t), n - 2);
+    const f = t - a;
+    for (let c = 0; c < 3; c++) {
+      lut[i * 4 + c] = Math.round(stops[a][c] * (1 - f) + stops[a + 1][c] * f);
+    }
+    lut[i * 4 + 3] = 255;
+  }
+  return lut;
+}
+
+/** CSS linear-gradient string (bottom to top by default) for previews. */
+export function colormapCSS(name, direction = "to right") {
+  const lut = colormapLUT(name);
+  const parts = [];
+  for (let i = 0; i <= 16; i++) {
+    const j = Math.round((i / 16) * 255) * 4;
+    parts.push(`rgb(${lut[j]},${lut[j + 1]},${lut[j + 2]}) ${(i / 16) * 100}%`);
+  }
+  return `linear-gradient(${direction}, ${parts.join(", ")})`;
+}

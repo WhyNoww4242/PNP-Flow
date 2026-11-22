@@ -1,0 +1,1 @@
+{"state":"solving","stage":1,"n_stages":2,"iteration":1,"res_norm":62.411590897706986,"message":"stage 1, Newton it 1","history":[{"stage":1,"it":0,"res_norm":135.58512719579284,"step_norm":0.0,"alpha":0.0},{"stage":1,"it":1,"res_norm":62.411590897706986,"step_norm":140.94503662684016,"alpha":0.5,"time_s":19.189709663391113}],"time_s":35.238004207611084}

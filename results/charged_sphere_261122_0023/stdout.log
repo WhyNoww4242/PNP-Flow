@@ -1,0 +1,16 @@
+# launched by HUD 2026-11-22 00:23:50
+# /home/spike/miniconda3/envs/pnpflow/bin/python -u /mnt/c/Users/Gnome/Desktop/VMBox/pnpflow/run.py charged_sphere --name charged_sphere_261122_0023
+An NVIDIA GPU may be present on this machine, but a CUDA-enabled jaxlib is not installed. Falling back to cpu.
+mesh: 4637 triangles, 30687 dofs (1.2s)
+  it  1  |R| 1.356e-14  |dU| 2.170e+01  alpha 1.000  (0.24s)
+solve: converged=True in 0.7s
+figures: 5 written to figures/ and svg/
+converged: True
+  [pass] max |phi - exact| / max phi: 3.722e-06  (vs exact charged-sphere potential (all nodes))
+  [pass] Gauss: outer flux vs enclosed charge: 7.550e-15  (3D totals: 2 pi * per-radian integrals; flux of E through 'outer' = 2 pi int -dphi/dn r ds, charge = 2 pi int q r dr dz)
+  [pass] Gauss: outer flux vs 4/3 pi R^3 q: 1.814e-08  (includes the P2 approximation of the sphere volume)
+  [info] min phi: 3.333e-02  (limit column = exact q R^3/(3 R_out) at the outer boundary)
+  [info] max phi: 5.000e-01  (limit column = exact q R^2/2 at the centre)
+  [pass] mesh diagnose: 0.000e+00  (all mesh checks pass (details: mesh_checks, mesh/diagnose.json))
+
+# process exited with code 0

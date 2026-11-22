@@ -1,0 +1,881 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pnpflow GUI workbook</title>
+<style>
+/* ---------- tokens ---------- */
+:root {
+  --font: system-ui, "Segoe UI Variable", "Segoe UI", -apple-system, "Noto Sans", Ubuntu, sans-serif;
+  --mono: "Cascadia Mono", "SF Mono", Consolas, "DejaVu Sans Mono", monospace;
+  --r: 6px;
+  --bg: oklch(98.5% 0.004 240);
+  --surface: oklch(100% 0 0);
+  --sunken: oklch(96% 0.006 240);
+  --line: oklch(89% 0.008 240);
+  --line-strong: oklch(80% 0.01 240);
+  --ink: oklch(24% 0.02 250);
+  --ink-2: oklch(45% 0.02 250);
+  --ink-3: oklch(60% 0.015 250);
+  --accent: oklch(52% 0.13 235);
+  --accent-ink: oklch(99% 0 0);
+  --accent-soft: oklch(94% 0.035 235);
+  --cat: oklch(55% 0.15 25);     /* cation / positive */
+  --an: oklch(52% 0.12 250);     /* anion / negative */
+  --ok: oklch(55% 0.12 150);
+  --warn: oklch(68% 0.13 75);
+  --b-wall: oklch(55% 0.15 25);
+  --b-inlet: oklch(55% 0.12 150);
+  --b-outlet: oklch(60% 0.13 75);
+  --b-side: oklch(55% 0.1 290);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: oklch(17% 0.012 250);
+    --surface: oklch(21% 0.014 250);
+    --sunken: oklch(15% 0.012 250);
+    --line: oklch(30% 0.015 250);
+    --line-strong: oklch(40% 0.018 250);
+    --ink: oklch(92% 0.008 240);
+    --ink-2: oklch(74% 0.012 240);
+    --ink-3: oklch(60% 0.012 240);
+    --accent: oklch(74% 0.12 230);
+    --accent-ink: oklch(18% 0.02 250);
+    --accent-soft: oklch(30% 0.05 235);
+    --cat: oklch(70% 0.14 25);
+    --an: oklch(72% 0.11 245);
+    --ok: oklch(72% 0.13 150);
+    --warn: oklch(80% 0.13 80);
+    --b-wall: oklch(70% 0.14 25);
+    --b-inlet: oklch(72% 0.13 150);
+    --b-outlet: oklch(80% 0.13 80);
+    --b-side: oklch(72% 0.1 290);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: oklch(17% 0.012 250);
+  --surface: oklch(21% 0.014 250);
+  --sunken: oklch(15% 0.012 250);
+  --line: oklch(30% 0.015 250);
+  --line-strong: oklch(40% 0.018 250);
+  --ink: oklch(92% 0.008 240);
+  --ink-2: oklch(74% 0.012 240);
+  --ink-3: oklch(60% 0.012 240);
+  --accent: oklch(74% 0.12 230);
+  --accent-ink: oklch(18% 0.02 250);
+  --accent-soft: oklch(30% 0.05 235);
+  --cat: oklch(70% 0.14 25);
+  --an: oklch(72% 0.11 245);
+  --ok: oklch(72% 0.13 150);
+  --warn: oklch(80% 0.13 80);
+  --b-wall: oklch(70% 0.14 25);
+  --b-inlet: oklch(72% 0.13 150);
+  --b-outlet: oklch(80% 0.13 80);
+  --b-side: oklch(72% 0.1 290);
+  color-scheme: dark;
+}
+
+/* ---------- base ---------- */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; font-variant-numeric: tabular-nums; background: var(--bg); color: var(--ink);
+  font: 15px/1.55 var(--font);
+}
+a { color: var(--accent); }
+code, kbd, .mono { font-family: var(--mono); font-size: 0.88em; }
+h1, h2, h3 { line-height: 1.2; margin: 0; font-weight: 600; }
+h1 { font-size: 28px; letter-spacing: -0.01em; }
+h2 { font-size: 20px; }
+h3 { font-size: 15px; }
+p { margin: 0 0 0.8em; max-width: 72ch; }
+.dim { color: var(--ink-2); }
+.faint { color: var(--ink-3); }
+button { font: inherit; color: inherit; }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+header.top {
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+header.top .wrap { display: flex; gap: 16px; align-items: center; padding-top: 14px; padding-bottom: 14px; }
+.brand { font-weight: 600; }
+.brand span { color: var(--ink-3); font-weight: 400; }
+nav.toc { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+nav.toc a {
+  text-decoration: none; color: var(--ink-2); padding: 4px 10px; border-radius: var(--r); font-size: 14px;
+}
+nav.toc a:hover { background: var(--sunken); color: var(--ink); }
+@media (max-width: 640px) { nav.toc { display: none; } .theme-btn { margin-left: auto; } }
+.theme-btn {
+  border: 1px solid var(--line); background: transparent; border-radius: var(--r);
+  padding: 4px 10px; cursor: pointer; font-size: 13px; color: var(--ink-2);
+}
+
+section.block { padding: 40px 0 8px; }
+section.block > .wrap > h2 { margin-bottom: 6px; }
+.lede { font-size: 17px; color: var(--ink-2); max-width: 68ch; }
+
+/* ---------- intro ---------- */
+.intro { padding: 36px 0 12px; }
+.intro h1 { margin-bottom: 10px; }
+.status-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0; margin-top: 22px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface);
+}
+.status-grid > div { padding: 14px 16px; border-right: 1px solid var(--line); }
+.status-grid > div:last-child { border-right: 0; }
+@media (max-width: 760px) { .status-grid > div { border-right: 0; border-bottom: 1px solid var(--line); } }
+.status-grid .k { font-size: 13px; color: var(--ink-3); }
+.status-grid .v { font-weight: 600; margin: 0 0 4px; }
+.status-grid .d { font-size: 14px; color: var(--ink-2); }
+.tag { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 999px; font-weight: 500; }
+.tag.ok { color: var(--ok); background: color-mix(in oklch, var(--ok) 14%, transparent); }
+.tag.plan { color: var(--warn); background: color-mix(in oklch, var(--warn) 16%, transparent); }
+
+/* ---------- pipeline ---------- */
+.pipeline { display: flex; gap: 0; margin: 18px 0 6px; overflow-x: auto; padding-bottom: 4px; }
+.step {
+  flex: 1 0 130px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface);
+  margin-left: -1px; position: relative;
+}
+.step:first-child { border-radius: var(--r) 0 0 var(--r); margin-left: 0; }
+.step:last-child { border-radius: 0 var(--r) var(--r) 0; }
+.step + .step::before {
+  content: ""; position: absolute; left: -5px; top: 50%; width: 8px; height: 8px; margin-top: -4px;
+  border-top: 1px solid var(--line-strong); border-right: 1px solid var(--line-strong); background: var(--surface);
+  transform: rotate(45deg);
+}
+.step .t { font-weight: 600; font-size: 14px; }
+.step .s { font-size: 13px; color: var(--ink-2); line-height: 1.4; margin-top: 2px; }
+
+/* ---------- mock window ---------- */
+.mock {
+  margin-top: 18px; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden;
+  background: var(--surface); font-size: 13px;
+}
+.mock-bar {
+  display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line);
+  background: var(--sunken); font-size: 12.5px;
+}
+.mock-bar .dots { display: flex; gap: 5px; }
+.mock-bar .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); display: block; }
+.mock-bar .title { font-family: var(--mono); color: var(--ink-2); }
+.mock-bar .run {
+  margin-left: auto; background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 4px;
+  padding: 3px 12px; font-weight: 600; font-size: 12.5px; cursor: default;
+}
+.mock-body { display: grid; grid-template-columns: 200px minmax(0, 1fr) 270px; grid-template-rows: 1fr 96px; min-height: 470px; }
+.mock-tree { grid-row: 1 / 3; border-right: 1px solid var(--line); padding: 8px 0; overflow: auto; }
+.mock-tree .grp { padding: 10px 12px 3px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.mock-tree button {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none;
+  padding: 4px 12px 4px 18px; cursor: pointer; color: var(--ink); font-size: 13px;
+}
+.mock-tree button:hover { background: var(--sunken); }
+.mock-tree button[aria-selected="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 500; }
+.mock-tree .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.mock-tree .ok-dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.mock-tree .warn-dot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.mock-canvas { position: relative; background: var(--sunken); display: grid; place-items: center; min-width: 0; }
+.mock-canvas svg { width: 100%; height: 100%; max-height: 470px; display: block; }
+.mock-canvas .hint {
+  position: absolute; left: 10px; top: 8px; font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+}
+.mock-insp { border-left: 1px solid var(--line); padding: 12px 14px; overflow: auto; }
+.mock-insp h4 { margin: 0 0 2px; font-size: 14px; }
+.mock-insp .sub { color: var(--ink-3); font-size: 12px; margin-bottom: 10px; }
+.field { margin-bottom: 9px; }
+.field label { display: block; font-size: 11.5px; color: var(--ink-2); margin-bottom: 2px; }
+.fake-input {
+  border: 1px solid var(--line); border-radius: 4px; padding: 4px 7px; background: var(--bg);
+  font-family: var(--mono); font-size: 12px; display: flex; justify-content: space-between; gap: 8px;
+}
+.fake-input .u { color: var(--ink-3); }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+.seg span { flex: 1; text-align: center; padding: 3px 4px; font-size: 11.5px; border-right: 1px solid var(--line); }
+.seg span:last-child { border-right: 0; }
+.seg span.on { background: var(--accent-soft); color: var(--ink); font-weight: 600; }
+.mini-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.mini-table th, .mini-table td { text-align: left; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.mini-table th { color: var(--ink-3); font-weight: 500; }
+.note-line { font-size: 12px; color: var(--ink); background: color-mix(in oklch, var(--warn) 14%, transparent); border-radius: 4px; padding: 5px 8px; margin-top: 10px; }
+.mock-log {
+  grid-column: 2 / 4; border-top: 1px solid var(--line); display: grid; grid-template-columns: 1fr 220px;
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); min-width: 0;
+}
+.mock-log pre { margin: 0; padding: 8px 12px; overflow-x: auto; white-space: pre; min-width: 0; }
+.mock-log svg { border-left: 1px solid var(--line); width: 100%; height: 100%; }
+@media (max-width: 900px) {
+  .mock-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 300px auto auto; }
+  .mock-tree { grid-row: auto; border-right: 0; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; padding: 6px; }
+  .mock-tree .grp { display: none; }
+  .mock-tree button { width: auto; padding: 4px 8px; border-radius: 4px; }
+  .mock-insp { border-left: 0; border-top: 1px solid var(--line); }
+  .mock-log { grid-column: auto; grid-template-columns: 1fr; }
+  .mock-log svg { display: none; }
+}
+
+/* ---------- stack table ---------- */
+.table-wrap { overflow-x: auto; margin-top: 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+table.cmp { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 14px; }
+table.cmp th, table.cmp td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.cmp thead th { font-size: 13px; color: var(--ink-2); font-weight: 600; background: var(--sunken); }
+table.cmp tbody tr:last-child td, table.cmp tbody tr:last-child th { border-bottom: 0; }
+table.cmp tbody th { font-weight: 600; white-space: nowrap; }
+table.cmp tr.pick > * { background: var(--accent-soft); }
+.pro { color: var(--ok); }
+.con { color: var(--cat); }
+
+.arch {
+  margin-top: 18px; display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 0; align-items: stretch;
+}
+.arch .box { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); padding: 12px 14px; }
+.arch .box h3 { font-size: 14px; margin-bottom: 4px; }
+.arch .box ul { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--ink-2); }
+.arch .arrow { display: grid; place-items: center; padding: 0 10px; font-family: var(--mono); font-size: 12px; color: var(--ink-3); text-align: center; }
+@media (max-width: 860px) { .arch { grid-template-columns: 1fr; } .arch .arrow { padding: 6px 0; } }
+
+/* ---------- questions ---------- */
+.q-layout { display: grid; grid-template-columns: 220px 1fr; gap: 28px; margin-top: 18px; align-items: start; }
+@media (max-width: 860px) { .q-layout { grid-template-columns: 1fr; } .q-side { position: static !important; } }
+.q-side {
+  position: sticky; top: 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); padding: 14px;
+}
+.q-side .count { font-size: 26px; font-weight: 600; font-family: var(--mono); }
+.meter { height: 4px; background: var(--sunken); border-radius: 2px; margin: 8px 0 12px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .25s ease-out; }
+.q-side ol { margin: 0 0 12px; padding: 0; list-style: none; font-size: 13.5px; }
+.q-side li a { display: flex; justify-content: space-between; text-decoration: none; color: var(--ink-2); padding: 3px 0; }
+.q-side li a:hover { color: var(--ink); }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
+  border: 1px solid var(--line-strong); background: var(--surface); border-radius: var(--r);
+  padding: 7px 10px; cursor: pointer; font-size: 14px; margin-top: 6px;
+}
+.btn:hover { background: var(--sunken); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn:focus-visible, .opt input:focus-visible + span, textarea:focus-visible, .mock-tree button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+.q-group { margin-bottom: 30px; }
+.q-group > h3 { font-size: 17px; margin: 8px 0 4px; }
+.q {
+  border-top: 1px solid var(--line); padding: 16px 0 18px;
+}
+.q-head { display: flex; gap: 10px; align-items: baseline; }
+.q-num { font-family: var(--mono); font-size: 12px; color: var(--ink-3); flex: none; width: 28px; }
+.q-title { font-weight: 600; }
+.q-why { font-size: 14px; color: var(--ink-2); margin: 3px 0 10px 38px; max-width: 70ch; }
+.opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 6px; margin-left: 38px; }
+@media (max-width: 560px) { .opts, .q-why, .q textarea { margin-left: 0 !important; } }
+.opt { position: relative; display: block; cursor: pointer; }
+.opt input { position: absolute; opacity: 0; pointer-events: none; }
+.opt > span {
+  display: block; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px 8px 32px;
+  background: var(--surface); font-size: 14px; line-height: 1.4; position: relative; height: 100%;
+}
+.opt > span::before {
+  content: ""; position: absolute; left: 10px; top: 11px; width: 13px; height: 13px;
+  border: 1.5px solid var(--line-strong); border-radius: 50%; background: var(--bg);
+}
+.opt input[type=checkbox] + span::before { border-radius: 3px; }
+.opt input:checked + span { border-color: var(--accent); background: var(--accent-soft); }
+.opt input:checked + span::before { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 2.5px var(--bg); }
+.opt small { display: block; color: var(--ink-2); font-size: 12.5px; margin-top: 1px; }
+.opt .rec { font-size: 11px; font-weight: 600; color: var(--accent); margin-left: 4px; }
+.q textarea {
+  display: block; width: calc(100% - 38px); margin: 8px 0 0 38px; min-height: 38px; resize: vertical;
+  border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); color: var(--ink);
+  font: 14px/1.4 var(--font); padding: 7px 10px;
+}
+@media (max-width: 560px) { .q textarea { width: 100%; } }
+.q textarea::placeholder { color: var(--ink-3); }
+
+#export-box {
+  margin: 10px 0 40px; display: none;
+}
+#export-box textarea {
+  width: 100%; min-height: 240px; font: 12.5px/1.45 var(--mono); border: 1px solid var(--line);
+  border-radius: var(--r); background: var(--sunken); color: var(--ink); padding: 10px;
+}
+.toast {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+  padding: 7px 14px; border-radius: var(--r); font-size: 14px; opacity: 0; transition: opacity .2s ease-out; pointer-events: none;
+}
+.toast.show { opacity: 1; }
+footer { border-top: 1px solid var(--line); padding: 20px 0 40px; color: var(--ink-3); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <span class="brand">pnpflow <span>GUI workbook</span></span>
+    <nav class="toc" aria-label="Sections">
+      <a href="#workflow">Workflow</a>
+      <a href="#mock">Window</a>
+      <a href="#stack">Rust stack</a>
+      <a href="#design">Design process</a>
+      <a href="#questions">Questions</a>
+    </nav>
+    <button class="theme-btn" id="theme-btn" type="button" aria-label="Toggle colour theme">Theme</button>
+  </div>
+</header>
+
+<main>
+<section class="intro">
+  <div class="wrap">
+    <h1>Designing the pnpflow desktop app</h1>
+    <p class="lede">The JAX solver works and is validated. The next step is a GUI that lets an electrochemist set up
+      their own cell, electrode or channel without writing Python. This page shows a first proposal and asks the
+      questions that decide the design. Answer them at the bottom, then export the answers and hand them back.</p>
+    <div class="status-grid">
+      <div><div class="k">Solver</div><div class="v">Python + JAX <span class="tag ok">working</span></div>
+        <div class="d">PNP + Stokes/Navier–Stokes, P2/P1 Taylor–Hood, exact Jacobians by <code>jacfwd</code>, adjoint sensitivities.</div></div>
+      <div><div class="k">Validation</div><div class="v">4 / 4 cases pass</div>
+        <div class="d">Gouy–Chapman (err 3e-6), EO slit vs PB (2e-4), manufactured solution (2e-4), cylinder balances.</div></div>
+      <div><div class="k">Today's GUI</div><div class="v">Web HUD (read-mostly)</div>
+        <div class="d">Views results and launches preset cases with parameter overrides. Can't define new problems.</div></div>
+      <div><div class="k">Planned GUI</div><div class="v">Rust desktop <span class="tag plan">design</span></div>
+        <div class="d">Model builder: geometry, species, boundaries, mesh, study, results.</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="workflow">
+  <div class="wrap">
+    <h2>Proposed workflow</h2>
+    <p class="dim">One path from a blank project to results. Each step writes a part of a single project file that the
+      Python solver reads, so the GUI never needs to know any FEM.</p>
+    <div class="pipeline" role="list">
+      <div class="step" role="listitem"><div class="t">Geometry</div><div class="s">Template, sketch or import. Name the boundaries.</div></div>
+      <div class="step" role="listitem"><div class="t">Electrolyte</div><div class="s">Ions (z, D, c<sub>bulk</sub>), solvent ε, temperature.</div></div>
+      <div class="step" role="listitem"><div class="t">Physics</div><div class="s">PNP on/off flow, advection form, stabilisation.</div></div>
+      <div class="step" role="listitem"><div class="t">Boundaries</div><div class="s">Electrode, wall, inlet, outlet. Per-species conditions.</div></div>
+      <div class="step" role="listitem"><div class="t">Mesh</div><div class="s">Auto-refined to the Debye length, with quality check.</div></div>
+      <div class="step" role="listitem"><div class="t">Study</div><div class="s">Ramp parameters, sweeps, live convergence.</div></div>
+      <div class="step" role="listitem"><div class="t">Results</div><div class="s">Fields, profiles, currents, forces, sensitivities.</div></div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="mock">
+  <div class="wrap">
+    <h2>Main window sketch</h2>
+    <p class="dim">Model tree on the left, the geometry or result in the centre, settings for the selected item on the
+      right, solver log underneath. Click items in the tree to see what each settings panel might hold.</p>
+
+    <div class="mock" aria-label="Interactive mock-up of the main window">
+      <div class="mock-bar">
+        <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="title">charged_cylinder.pnp</span>
+        <button class="run" type="button" tabindex="-1">Solve</button>
+      </div>
+      <div class="mock-body">
+        <div class="mock-tree" role="tablist" aria-label="Model tree" id="tree">
+          <div class="grp">Model</div>
+          <button role="tab" data-k="geometry">Geometry<span class="ok-dot"></span></button>
+          <button role="tab" data-k="electrolyte">Electrolyte · NaCl<span class="ok-dot"></span></button>
+          <button role="tab" data-k="physics">Physics · PNP + NS<span class="ok-dot"></span></button>
+          <div class="grp">Boundaries</div>
+          <button role="tab" data-k="wall" data-b="wall"><span class="sw" style="background:var(--b-wall)"></span>wall · electrode<span class="warn-dot" title="needs input"></span></button>
+          <button role="tab" data-k="inlet" data-b="inlet"><span class="sw" style="background:var(--b-inlet)"></span>inlet<span class="ok-dot"></span></button>
+          <button role="tab" data-k="outlet" data-b="outlet"><span class="sw" style="background:var(--b-outlet)"></span>outlet<span class="ok-dot"></span></button>
+          <button role="tab" data-k="side" data-b="side"><span class="sw" style="background:var(--b-side)"></span>side<span class="ok-dot"></span></button>
+          <div class="grp">Solve</div>
+          <button role="tab" data-k="mesh">Mesh<span class="ok-dot"></span></button>
+          <button role="tab" data-k="study">Study · continuation<span class="ok-dot"></span></button>
+          <div class="grp">Results</div>
+          <button role="tab" data-k="results">run_2026-11-21</button>
+        </div>
+
+        <div class="mock-canvas">
+          <span class="hint" id="canvas-hint">y, z  in units of a</span>
+          <svg viewBox="0 0 400 300" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Geometry: cylinder in a channel">
+            <defs>
+              <radialGradient id="edl" cx="50%" cy="50%" r="50%">
+                <stop offset="55%" stop-color="var(--cat)" stop-opacity="0.55"/>
+                <stop offset="100%" stop-color="var(--cat)" stop-opacity="0"/>
+              </radialGradient>
+            </defs>
+            <g id="g-mesh" opacity="0.5" stroke="var(--line-strong)" stroke-width="0.6" fill="none"></g>
+            <g id="g-field" opacity="0"><circle cx="200" cy="120" r="34" fill="url(#edl)"/></g>
+            <g id="g-stream" opacity="0" stroke="var(--ink-3)" stroke-width="1" fill="none"></g>
+            <line class="bd" data-b="inlet"  x1="60" y1="20" x2="340" y2="20" stroke="var(--b-inlet)" stroke-width="3"/>
+            <line class="bd" data-b="outlet" x1="60" y1="280" x2="340" y2="280" stroke="var(--b-outlet)" stroke-width="3"/>
+            <line class="bd" data-b="side"   x1="60" y1="20" x2="60" y2="280" stroke="var(--b-side)" stroke-width="3"/>
+            <line class="bd" data-b="side"   x1="340" y1="20" x2="340" y2="280" stroke="var(--b-side)" stroke-width="3"/>
+            <circle class="bd" data-b="wall" cx="200" cy="120" r="18" fill="var(--surface)" stroke="var(--b-wall)" stroke-width="3"/>
+            <g font-family="Cascadia Mono, Consolas, monospace" font-size="7.5" fill="var(--ink-3)">
+              <text x="200" y="13" text-anchor="middle">inlet  u = (0, −1), c = c₀, φ = 0</text>
+              <text x="200" y="295" text-anchor="middle">outlet  traction free</text>
+              <text x="200" y="152" text-anchor="middle">φ = ζ</text>
+            </g>
+          </svg>
+        </div>
+
+        <div class="mock-insp" id="insp" role="tabpanel" aria-live="polite"></div>
+
+        <div class="mock-log">
+<pre id="log">stage 1: phi_wall=0.973
+  it  1  |R| 6.24e+01  |dU| 1.41e+02  alpha 0.500
+  it  2  |R| 3.10e-01  |dU| 8.82e+00  alpha 1.000
+  it  3  |R| 2.71e-05  |dU| 4.10e-02  alpha 1.000
+  it  4  |R| 3.02e-11  converged</pre>
+          <svg viewBox="0 0 220 96" preserveAspectRatio="none" aria-label="Residual history">
+            <polyline points="14,14 60,24 106,46 152,70 198,86" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+            <g fill="var(--accent)"><circle cx="14" cy="14" r="2"/><circle cx="60" cy="24" r="2"/><circle cx="106" cy="46" r="2"/><circle cx="152" cy="70" r="2"/><circle cx="198" cy="86" r="2"/></g>
+            <text x="8" y="92" font-size="9" fill="var(--ink-3)" font-family="Cascadia Mono, Consolas, monospace">log |R|</text>
+          </svg>
+        </div>
+      </div>
+    </div>
+    <p class="faint" style="margin-top:8px;font-size:13px">Sketch only: values come from the existing <code>cylinder</code> case. The
+      Butler–Volmer option in the electrode panel is not in the solver yet.</p>
+  </div>
+</section>
+
+<section class="block" id="stack">
+  <div class="wrap">
+    <h2>Rust: how the pieces fit</h2>
+    <p class="dim">Yes, the GUI can be Rust. The solver stays in Python/JAX because that is where the autodiff lives.
+      The two talk through a project file in, and the existing results folder out (<code>docs/DATA_FORMAT.md</code>).</p>
+
+    <div class="arch">
+      <div class="box"><h3>Rust app</h3><ul>
+        <li>Project file editor and model tree</li><li>Starts, stops and watches solver runs</li>
+        <li>Decodes meshes and fields fast for the viewer</li></ul></div>
+      <div class="arrow">project.json →<br>← results/&lt;run&gt;/</div>
+      <div class="box"><h3>Python CLI</h3><ul>
+        <li><code>run.py --spec project.json</code> (new)</li><li>gmsh geometry and mesh</li>
+        <li>writes <code>progress.json</code> while running</li></ul></div>
+      <div class="arrow">calls</div>
+      <div class="box"><h3>JAX core</h3><ul>
+        <li>weak form, <code>jacfwd</code> Jacobians</li><li>Newton + continuation</li>
+        <li>adjoint sensitivities</li></ul></div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="cmp">
+        <thead><tr><th>Option</th><th>What it is</th><th>Good for us</th><th>Costs</th></tr></thead>
+        <tbody>
+          <tr class="pick"><th>Tauri 2 <span class="tag ok">suggested</span></th>
+            <td>Rust backend, web front end in the system webview. Small installers.</td>
+            <td class="pro">Reuses the HUD's WebGL field viewer, Plotly profiles and CSS. Impeccable's design tools work on it directly. Rust handles processes and files.</td>
+            <td class="con">Two languages in the GUI (Rust + JS/TS). Webview differences between Windows and Linux.</td></tr>
+          <tr><th>egui / eframe</th>
+            <td>Immediate-mode, pure Rust, GPU via wgpu.</td>
+            <td class="pro">One language. Very fast for large meshes. Good for dense tool-style panels. <code>egui_plot</code> for curves.</td>
+            <td class="con">The field viewer, colormaps and plots all need rewriting. Looks generic unless styled with care.</td></tr>
+          <tr><th>Slint</th>
+            <td>Declarative UI language with a Rust API.</td>
+            <td class="pro">Polished native widgets, live preview while designing.</td>
+            <td class="con">Custom GPU rendering for fields is harder. Smaller ecosystem for plots.</td></tr>
+          <tr><th>Iced</th>
+            <td>Elm-style retained UI in Rust, wgpu.</td>
+            <td class="pro">Clean state model, custom shaders possible.</td>
+            <td class="con">API still changing between releases. Fewer ready-made widgets for forms and tables.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="design">
+  <div class="wrap">
+    <h2>Design process: impeccable</h2>
+    <p class="dim"><a href="https://github.com/pbakaus/impeccable">impeccable</a> is a Claude Code skill: design playbooks
+      plus a rule-based lint engine for HTML/CSS. Here is how it fits this project.</p>
+    <div class="table-wrap">
+      <table class="cmp">
+        <thead><tr><th>Piece</th><th>What we do with it</th></tr></thead>
+        <tbody>
+          <tr><th>Mode: Operate</th><td>A solver GUI is a tool used for hours. Scanability, consistency and native behaviour come before
+            expression. One type family, a fixed type scale, a restrained palette where the accent marks only actions, selection and
+            state. Motion 150–250 ms and only to show state changes.</td></tr>
+          <tr><th><code>PRODUCT.md</code></th><td>Written once by <code>/impeccable init</code>: users, purpose, operating context,
+            constraints. Your answers below feed it.</td></tr>
+          <tr><th><code>DESIGN.md</code></th><td>Design tokens (colours, type, spacing, components) that both the GUI and plots use.
+            Field colormaps are cmasher (cosmic; iceburn for signed fields), never viridis or other matplotlib defaults, and are separate from UI colour.</td></tr>
+          <tr><th><code>shape</code> → build → <code>critique</code>, <code>audit</code></th><td>Plan each screen before code, then review
+            against Nielsen heuristics and accessibility (contrast at least 4.5:1, focus states, keyboard use).</td></tr>
+          <tr><th><code>detect</code> lint + hook</th><td>Only scans HTML/CSS/JS. It works on a <strong>Tauri</strong> front end but not on
+            egui, Slint or Iced code. With those we would use the playbooks by hand and critique screenshots.</td></tr>
+          <tr><th>Rules already applied here</th><td>System font instead of an overused web font. No numbered section labels, no
+            uppercase kicker labels, no coloured side stripes, monospace only for numbers and code. Light and dark follow the OS.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="questions">
+  <div class="wrap">
+    <h2>Questions</h2>
+    <p class="dim">Pick what fits; add notes where the options miss. Answers stay in this browser. When done, use
+      <strong>Export answers</strong> and paste the result back to Claude (or save it as <code>docs/ui_answers.md</code>).</p>
+
+    <div class="q-layout">
+      <aside class="q-side" aria-label="Progress">
+        <div class="count" id="q-count">0 / 0</div>
+        <div class="faint" style="font-size:13px">answered</div>
+        <div class="meter"><i id="q-meter"></i></div>
+        <ol id="q-index"></ol>
+        <button class="btn primary" id="export-btn" type="button">Export answers</button>
+        <button class="btn" id="download-btn" type="button">Download .md</button>
+        <button class="btn" id="reset-btn" type="button">Clear all</button>
+      </aside>
+      <div>
+        <form id="q-form" onsubmit="return false"></form>
+        <div id="export-box">
+          <h3 style="margin-bottom:8px">Your answers</h3>
+          <textarea id="export-text" readonly aria-label="Exported answers"></textarea>
+          <button class="btn primary" id="copy-btn" type="button" style="width:auto;padding:7px 16px">Copy to clipboard</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer><div class="wrap">pnpflow · GUI workbook · draft of 2026-11-21. See <code>AGENTS.md</code> for how the solver works.</div></footer>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+/* ---------------- theme ---------------- */
+(function () {
+  const root = document.documentElement;
+  let saved = null;
+  try { saved = localStorage.getItem("pnp-ui-theme"); } catch (e) {}
+  if (saved) root.dataset.theme = saved;
+  document.getElementById("theme-btn").addEventListener("click", () => {
+    const dark = root.dataset.theme ? root.dataset.theme === "dark"
+      : matchMedia("(prefers-color-scheme: dark)").matches;
+    root.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("pnp-ui-theme", root.dataset.theme); } catch (e) {}
+  });
+})();
+
+/* ---------------- mock window ---------------- */
+const PANELS = {
+  geometry: `<h4>Geometry</h4><div class="sub">Template: cylinder in channel</div>
+    <div class="field"><label>Source</label><div class="seg"><span class="on">Template</span><span>Sketch</span><span>Import .msh/.step</span></div></div>
+    <div class="field"><label>Cylinder radius a</label><div class="fake-input">1.0<span class="u">μm</span></div></div>
+    <div class="field"><label>Half width</label><div class="fake-input">40<span class="u">a</span></div></div>
+    <div class="field"><label>Upstream / downstream</label><div class="fake-input">40 / 80<span class="u">a</span></div></div>
+    <div class="note-line">4 named boundaries found: wall, inlet, outlet, side.</div>`,
+  electrolyte: `<h4>Electrolyte</h4><div class="sub">1:1 salt, 298.15 K, water ε<sub>r</sub> = 78.5</div>
+    <table class="mini-table"><thead><tr><th>ion</th><th>z</th><th>D [m²/s]</th><th>c [mM]</th></tr></thead><tbody>
+    <tr><td style="color:var(--cat)">Na⁺</td><td>+1</td><td>1.33e-9</td><td>10</td></tr>
+    <tr><td style="color:var(--an)">Cl⁻</td><td>−1</td><td>2.03e-9</td><td>10</td></tr></tbody></table>
+    <div class="field" style="margin-top:10px"><label>Debye length (computed)</label><div class="fake-input">3.04<span class="u">nm</span></div></div>
+    <div class="note-line">δ = λ<sub>D</sub>/a = 0.003: mesh will need ~8 elements across the EDL.</div>`,
+  physics: `<h4>Physics</h4><div class="sub">What is solved</div>
+    <div class="field"><label>Flow</label><div class="seg"><span>None</span><span>Prescribed</span><span>Stokes</span><span class="on">Navier–Stokes</span></div></div>
+    <div class="field"><label>Advection form</label><div class="seg"><span class="on">Conservative</span><span>Non-conservative</span></div></div>
+    <div class="field"><label>SUPG stabilisation</label><div class="seg"><span class="on">Off</span><span>On</span></div></div>
+    <div class="field"><label>Groups (computed)</label><div class="fake-input">Pe 1.0 · Re 0.5 · K 50<span class="u"></span></div></div>`,
+  wall: `<h4>wall · electrode</h4><div class="sub">r = a, 1 curve</div>
+    <div class="field"><label>Potential</label><div class="seg"><span class="on">Fixed ζ</span><span>Stern</span><span>Charge σ</span></div></div>
+    <div class="field"><label>ζ</label><div class="fake-input">25<span class="u">mV</span></div></div>
+    <div class="field"><label>Ions</label><div class="seg"><span class="on">Blocking</span><span>Flux</span><span>Butler–Volmer</span></div></div>
+    <div class="field"><label>Flow</label><div class="seg"><span class="on">No slip</span><span>Slip</span></div></div>
+    <div class="note-line">Butler–Volmer kinetics: not in the solver yet (see question 5).</div>`,
+  inlet: `<h4>inlet</h4><div class="sub">z = +40a</div>
+    <div class="field"><label>Velocity</label><div class="fake-input">(0, −1)<span class="u">U</span></div></div>
+    <div class="field"><label>Ions</label><div class="seg"><span class="on">Bulk</span><span>Fixed</span><span>Flux</span></div></div>
+    <div class="field"><label>Potential</label><div class="fake-input">0<span class="u">V</span></div></div>`,
+  outlet: `<h4>outlet</h4><div class="sub">z = −80a</div>
+    <div class="field"><label>Flow</label><div class="seg"><span class="on">Pressure p₀ = 0</span><span>Free</span></div></div>
+    <div class="field"><label>Ions</label><div class="seg"><span class="on">Outflow</span><span>Blocking</span></div></div>
+    <div class="field"><label>Potential</label><div class="seg"><span class="on">Insulating</span><span>Fixed</span></div></div>`,
+  side: `<h4>side</h4><div class="sub">y = ±40a, 2 lines</div>
+    <div class="field"><label>Flow</label><div class="seg"><span class="on">Symmetry (slip)</span><span>Far-field</span></div></div>
+    <div class="field"><label>Ions</label><div class="seg"><span class="on">Blocking</span><span>Bulk</span></div></div>`,
+  mesh: `<h4>Mesh</h4><div class="sub">P2 triangles, gmsh</div>
+    <div class="field"><label>Size at charged walls</label><div class="seg"><span class="on">Auto (δ/8)</span><span>Manual</span></div></div>
+    <div class="field"><label>Far-field size</label><div class="fake-input">4.0<span class="u">a</span></div></div>
+    <table class="mini-table" style="margin-top:6px"><tbody>
+    <tr><th>elements</th><td>51,904</td></tr><tr><th>dofs</th><td>208,331</td></tr><tr><th>min quality</th><td>0.41</td></tr></tbody></table>`,
+  study: `<h4>Study · continuation</h4><div class="sub">Reach hard targets in steps</div>
+    <table class="mini-table"><thead><tr><th>stage</th><th>parameter</th><th>from → to</th></tr></thead><tbody>
+    <tr><td>1</td><td>ζ</td><td>0 → 25 mV</td></tr><tr><td>2</td><td>K</td><td>0 → 50</td></tr></tbody></table>
+    <div class="field" style="margin-top:10px"><label>Newton tolerance</label><div class="fake-input">1e-9<span class="u"></span></div></div>
+    <div class="field"><label>Sensitivities of drag to</label><div class="fake-input">K, δ, ζ<span class="u"></span></div></div>`,
+  results: `<h4>run_2026-11-21</h4><div class="sub">converged · 4 Newton steps · 18.9 s</div>
+    <div class="field"><label>Show</label><div class="seg"><span class="on">c⁺</span><span>φ</span><span>|u|</span><span>ρ</span></div></div>
+    <table class="mini-table"><tbody>
+    <tr><th>drag</th><td>12.5</td></tr><tr><th>wall ion flux</th><td>0 (ok)</td></tr><tr><th>Gauss balance</th><td>2e-15 (ok)</td></tr>
+    <tr><th>∂drag/∂K</th><td>0.12</td></tr></tbody></table>`
+};
+
+(function () {
+  const mesh = document.getElementById("g-mesh");
+  let d = "";
+  for (let x = 60; x <= 340; x += 20) d += `M${x} 20V280`;
+  for (let y = 20; y <= 280; y += 20) d += `M60 ${y}H340`;
+  for (let x = 60; x < 340; x += 20) for (let y = 20; y < 280; y += 20) {
+    const cx = x + 10 - 200, cy = y + 10 - 120;
+    if (cx * cx + cy * cy > 900) d += `M${x} ${y}L${x + 20} ${y + 20}`;
+  }
+  mesh.innerHTML = `<path d="${d}"/>` +
+    Array.from({ length: 3 }, (_, i) => `<circle cx="200" cy="120" r="${21 + i * 4}"/>`).join("");
+  const st = document.getElementById("g-stream");
+  st.innerHTML = [-1, -0.5, 0.5, 1].map(s => {
+    const x0 = 200 + s * 55;
+    return `<path d="M${x0} 22 C ${x0} 90, ${200 + s * 75} 120, ${x0} 170 S ${x0} 260, ${x0} 278"/>`;
+  }).join("");
+
+  const tree = document.getElementById("tree");
+  const insp = document.getElementById("insp");
+  const hint = document.getElementById("canvas-hint");
+  function select(btn) {
+    tree.querySelectorAll("button").forEach(b => b.setAttribute("aria-selected", b === btn ? "true" : "false"));
+    const k = btn.dataset.k;
+    insp.innerHTML = PANELS[k];
+    const b = btn.dataset.b;
+    document.querySelectorAll(".bd").forEach(el => {
+      el.style.opacity = !b || el.dataset.b === b ? "1" : "0.18";
+    });
+    const showMesh = k === "mesh", showRes = k === "results";
+    mesh.setAttribute("opacity", showMesh ? "0.9" : "0.35");
+    document.getElementById("g-field").setAttribute("opacity", showRes ? "1" : "0");
+    st.setAttribute("opacity", showRes ? "1" : "0");
+    hint.textContent = showRes ? "c⁺ / c₀ · streamlines" : showMesh ? "mesh · refined at wall" : "y, z  in units of a";
+  }
+  tree.addEventListener("click", e => { const b = e.target.closest("button"); if (b) select(b); });
+  tree.addEventListener("keydown", e => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const bs = [...tree.querySelectorAll("button")];
+    const i = bs.indexOf(document.activeElement);
+    if (i < 0) return;
+    e.preventDefault();
+    const n = bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length];
+    n.focus(); select(n);
+  });
+  select(tree.querySelector('[data-k="wall"]'));
+})();
+
+/* ---------------- questions ---------------- */
+const QUESTIONS = [
+  { group: "Who and where", items: [
+    { id: "users", title: "Who is the main user?", type: "one",
+      why: "Sets how much the GUI hides: units, nondimensional groups, solver settings.",
+      opts: [
+        ["Experimental electrochemists", "Know the chemistry, not FEM. Need guided set-up and sane defaults."],
+        ["Computational researchers", "Want every knob visible, scripting, raw output."],
+        ["Both, with a beginner / expert switch", "Guided by default, advanced panels on demand."],
+        ["Students / teaching", "Fast templates, clear pictures, small problems."]] },
+    { id: "platform", title: "Which operating systems must it run on?", type: "many",
+      why: "The solver runs in WSL today. A native Windows app would talk to WSL or to a bundled Python.",
+      opts: [["Windows"], ["Linux"], ["macOS"], ["Remote: solve on a workstation or cluster, view locally"]] },
+    { id: "python", title: "How should users get the Python/JAX side?", type: "one",
+      why: "JAX, gmsh and PARDISO are the hard part of installing.",
+      opts: [
+        ["App installs a private environment on first run", "Uses uv; nothing for the user to do.", true],
+        ["User installs it; app points at a Python path", "Simplest for us, harder for users."],
+        ["Container (Docker / Podman)", "Same everywhere, but needs a container runtime."]] }
+  ]},
+  { group: "Physics input", items: [
+    { id: "units", title: "Which units should the inputs use?", type: "one",
+      why: "The solver works in dimensionless groups (δ, Pe, Re, K). Scientists think in mM, nm, mV, m²/s.",
+      opts: [
+        ["SI / lab units, groups computed for you", "Show δ, Pe, K as read-only results.", true],
+        ["Dimensionless groups only", "Same as the solver today."],
+        ["Both, with a toggle"]] },
+    { id: "features", title: "Which electrochemistry features matter most next?", type: "many",
+      why: "The solver is steady-state with blocking, flux, Stern and surface-charge conditions. These would be new.",
+      opts: [
+        ["Butler–Volmer electrode kinetics", "Faradaic current at an electrode, with Frumkin correction."],
+        ["Applied potential or current (potentiostat / galvanostat)"],
+        ["Time-dependent: chronoamperometry, CV"],
+        ["Impedance (EIS) by small-signal linearisation", "JAX makes the linearised problem cheap."],
+        ["Homogeneous reactions between species"],
+        ["Axisymmetric (r–z) geometry"],
+        ["Steric / modified PNP for concentrated electrolytes"],
+        ["Porous electrodes"],
+        ["3D"]] },
+    { id: "geometry", title: "How should users make their geometry?", type: "many",
+      why: "Geometry is built in gmsh from Python today.",
+      opts: [
+        ["Parametric templates", "Channel, cylinder, electrode pair, nanopore, rotating disk…"],
+        ["2D sketcher in the app", "Lines, arcs, booleans, then name the boundaries."],
+        ["Import CAD / mesh", ".step, .dxf, gmsh .geo/.msh"],
+        ["Write a gmsh / Python script"]] },
+    { id: "species", title: "How are ions entered?", type: "one",
+      opts: [
+        ["Built-in ion library + custom entries", "Pick Na⁺, Cl⁻, Fe(CN)₆³⁻… with z and D filled in.", true],
+        ["Manual table only"]] }
+  ]},
+  { group: "Workflow", items: [
+    { id: "builder", title: "What should setting up a model feel like?", type: "one",
+      opts: [
+        ["Model tree + settings panel", "Like the sketch above. Everything visible at once.", true],
+        ["Step-by-step wizard", "One screen per step, can't skip ahead."],
+        ["Wizard for new models, tree for editing them"]] },
+    { id: "studies", title: "How visible should continuation and sweeps be?", type: "one",
+      why: "Hard cases (high ζ, high K) only converge by ramping parameters.",
+      opts: [
+        ["Automatic; show it only if it fails"],
+        ["Editable stage list, pre-filled automatically", "", true],
+        ["Full sweep studies: vary a parameter, plot a quantity", "e.g. drag vs ζ, current vs voltage."]] },
+    { id: "project", title: "What should a saved project be?", type: "one",
+      opts: [
+        ["One human-readable file (JSON or TOML)", "Easy to diff, version and run from the command line.", true],
+        ["Folder with the project file, meshes and results"],
+        ["Binary / database file"]] }
+  ]},
+  { group: "Results", items: [
+    { id: "outputs", title: "Which results do users look at first?", type: "many",
+      opts: [
+        ["2D field maps (c, φ, u, ρ)"], ["Line profiles across the EDL"],
+        ["Current / I–V curves"], ["Fluxes per boundary"], ["Forces: drag, lift, electric"],
+        ["Sensitivities (∂Q/∂p)"], ["Convergence and solver health"], ["Run-to-run comparison"]] },
+    { id: "export", title: "What exports are needed?", type: "many",
+      opts: [
+        ["CSV of profiles and integrals"], ["ParaView (.vtu)"], ["Publication-ready figures (PNG / PDF / SVG)"],
+        ["A Python script that reproduces the run"], ["Report (PDF / HTML) of a run"]] }
+  ]},
+  { group: "Technology", items: [
+    { id: "framework", title: "Which Rust GUI route?", type: "one",
+      why: "See the comparison table above.",
+      opts: [
+        ["Tauri 2 (Rust + web front end)", "Reuses the current HUD viewer and styling.", true],
+        ["egui / eframe (pure Rust)", "One language, GPU-fast; viewer rewritten."],
+        ["Slint"], ["Iced"], ["No preference, you choose"]] },
+    { id: "bridge", title: "How should the GUI and the solver talk?", type: "one",
+      opts: [
+        ["Start run.py as a process; exchange files", "What the HUD does now. Simple and robust.", true],
+        ["Long-running Python server (HTTP / WebSocket)", "Keeps JAX compiled between runs, so repeat solves start fast."],
+        ["Embed Python in Rust (PyO3)", "One process, but packaging gets harder."]] },
+    { id: "impeccable", title: "How should impeccable be set up?", type: "one",
+      why: "It installs as a Claude Code plugin or with npx, and writes PRODUCT.md / DESIGN.md at the repo root.",
+      opts: [
+        ["Install it for this project and write PRODUCT.md + DESIGN.md now", "", true],
+        ["Use its rules as guidance only, no install"],
+        ["Install it globally for all my projects"]] }
+  ]},
+  { group: "Look and feel", items: [
+    { id: "theme", title: "Light or dark?", type: "one",
+      opts: [["Follow the OS setting", "", true], ["Dark by default"], ["Light by default"]] },
+    { id: "density", title: "How dense should the screens be?", type: "one",
+      opts: [
+        ["Compact, instrument-like", "Small type, lots on screen, like the current HUD."],
+        ["Balanced", "Compact panels, roomier set-up screens.", true],
+        ["Roomy and guided"]] },
+    { id: "keep", title: "What from the current web HUD should carry over?", type: "many",
+      opts: [
+        ["Field viewer (WebGL, probes, streamlines)"], ["Summary cards and checks"],
+        ["Keyboard shortcuts"], ["Run list with live status"], ["Its colours and type"], ["Nothing in particular"]] },
+    { id: "else", title: "Anything else: software you like or hate using?", type: "text",
+      why: "COMSOL, ParaView, Origin, EC-Lab, Nova… what to copy and what to avoid." }
+  ]}
+];
+
+const KEY = "pnp-ui-answers-v1";
+let state = {};
+try { state = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch (e) { state = {}; }
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+const form = document.getElementById("q-form");
+const index = document.getElementById("q-index");
+let n = 0;
+const all = [];
+QUESTIONS.forEach((g, gi) => {
+  const gEl = document.createElement("div");
+  gEl.className = "q-group"; gEl.id = "g" + gi;
+  gEl.innerHTML = `<h3>${esc(g.group)}</h3>`;
+  g.items.forEach(q => {
+    n += 1; q.n = n; all.push(q);
+    const s = state[q.id] || { sel: [], note: "" };
+    let opts = "";
+    if (q.type !== "text") {
+      opts = `<div class="opts" role="${q.type === "one" ? "radiogroup" : "group"}" aria-labelledby="t-${q.id}">` +
+        q.opts.map(([label, sub, rec]) => `<label class="opt"><input type="${q.type === "one" ? "radio" : "checkbox"}"
+          name="${q.id}" value="${esc(label)}" ${s.sel.includes(label) ? "checked" : ""}><span>${esc(label)}${rec ? '<span class="rec">suggested</span>' : ""}${sub ? `<small>${esc(sub)}</small>` : ""}</span></label>`).join("") +
+        `</div>`;
+    }
+    const el = document.createElement("div");
+    el.className = "q"; el.id = "q-" + q.id;
+    el.innerHTML = `<div class="q-head"><span class="q-num">${String(n).padStart(2, "0")}</span><span class="q-title" id="t-${q.id}">${esc(q.title)}</span></div>
+      ${q.why ? `<div class="q-why">${esc(q.why)}</div>` : ""}${opts}
+      <textarea data-note="${q.id}" rows="${q.type === "text" ? 4 : 1}" placeholder="${q.type === "text" ? "Your answer" : "Notes (optional)"}" aria-label="Notes for question ${n}">${esc(s.note)}</textarea>`;
+    gEl.appendChild(el);
+  });
+  form.appendChild(gEl);
+  const li = document.createElement("li");
+  li.innerHTML = `<a href="#g${gi}"><span>${esc(g.group)}</span><span class="mono faint" data-gc="${gi}"></span></a>`;
+  index.appendChild(li);
+});
+
+function answered(q) { const s = state[q.id]; return !!s && (s.sel.length > 0 || s.note.trim() !== ""); }
+function refresh() {
+  const done = all.filter(answered).length;
+  document.getElementById("q-count").textContent = `${done} / ${all.length}`;
+  document.getElementById("q-meter").style.width = (100 * done / all.length) + "%";
+  QUESTIONS.forEach((g, gi) => {
+    document.querySelector(`[data-gc="${gi}"]`).textContent = `${g.items.filter(answered).length}/${g.items.length}`;
+  });
+}
+form.addEventListener("input", e => {
+  const t = e.target;
+  const id = t.name || t.dataset.note;
+  if (!id) return;
+  const s = state[id] || (state[id] = { sel: [], note: "" });
+  if (t.dataset.note) s.note = t.value;
+  else s.sel = [...form.querySelectorAll(`input[name="${id}"]:checked`)].map(i => i.value);
+  save(); refresh();
+});
+refresh();
+
+function markdown() {
+  let out = "# pnpflow GUI — answers\n\n";
+  QUESTIONS.forEach(g => {
+    out += `## ${g.group}\n\n`;
+    g.items.forEach(q => {
+      const s = state[q.id] || { sel: [], note: "" };
+      out += `**${q.n}. ${q.title}**\n`;
+      if (s.sel.length) out += s.sel.map(x => `- ${x}`).join("\n") + "\n";
+      if (s.note.trim()) out += `> ${s.note.trim().replace(/\n/g, "\n> ")}\n`;
+      if (!s.sel.length && !s.note.trim()) out += "- (no answer)\n";
+      out += "\n";
+    });
+  });
+  return out;
+}
+const toast = msg => { const t = document.getElementById("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 1600); };
+document.getElementById("export-btn").addEventListener("click", () => {
+  const box = document.getElementById("export-box");
+  box.style.display = "block";
+  document.getElementById("export-text").value = markdown();
+  box.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+document.getElementById("copy-btn").addEventListener("click", async () => {
+  const ta = document.getElementById("export-text");
+  try { await navigator.clipboard.writeText(ta.value); toast("Copied"); }
+  catch (e) { ta.select(); document.execCommand("copy"); toast("Copied"); }
+});
+document.getElementById("download-btn").addEventListener("click", () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([markdown()], { type: "text/markdown" }));
+  a.download = "ui_answers.md"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+document.getElementById("reset-btn").addEventListener("click", () => {
+  if (!confirm("Clear all answers?")) return;
+  state = {}; save();
+  form.querySelectorAll("input").forEach(i => i.checked = false);
+  form.querySelectorAll("textarea").forEach(t => t.value = "");
+  refresh();
+});
+</script>
+</body>
+</html>
