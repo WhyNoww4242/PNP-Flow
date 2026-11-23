@@ -21,7 +21,7 @@ declare -A A_OUT=([narrow]=1 [converging]=1 [diverging]=2 [wide]=2)
 
 COMMON=(--set L_nm=10000 --set a_ref_nm=10
         --set phi_w_mV=10 --set c0_mM=0.948 --set eps=7.0832e-10 --set T=298.15 --set D=1.337e-9
-        --set end_charged=1 --set sdl_radius=0 --set sdl_length=0
+        --set phi_end_mV=10 --set sdl_radius=0 --set sdl_length=0
         --set tau_end=1.01 --set dns_times=1 --set dns_init=1)
 
 run_case() {  # name, extra args...

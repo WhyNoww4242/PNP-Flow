@@ -207,7 +207,7 @@ results/             run outputs (not source)
 |---|---|
 | equations | paper Eq. (4): rho, S, Phi, tau = D t / l_p^2, R = r/a_p, Z = z/l_p; solver uses lengths / a_p, t~ = D t / a_p^2, so tau = t~ / L^2 |
 | mu | mu = rho + 2 Phi; axial lines are cross-section averages (weight r dr) |
-| BCs | pore wall phi = Phi_w (step, no Stern), blocking; pore end blocking (phi = Phi_w by default, `end_charged`); SDL walls uncharged, no flux; SDL far end c = c0, phi = 0 |
+| BCs | pore wall phi = Phi_w (step, no Stern), blocking; pore end blocking (phi = `phi_end_mV`, default = Phi_w; replaced the old `end_charged` switch); SDL walls uncharged, no flux; SDL far end c = c0, phi = 0 |
 | SDL | radius 2 max α, length l_p/2 + 1.5 max α (extra for meshing); Biot number not used |
 | values | ε = 7.1e-10 F/m, D = 1.34e-9 m²/s, c0 = 0.94 mM (λ_D = 10.0 nm), a_p = 10 nm, l_p = 1 µm |
 | times | early τ = 0.13; intermediate `tau_mid` (default 0.5); profiles saved at every τ in `pore.TAU_OUT` |

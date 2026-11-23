@@ -218,12 +218,15 @@ def apply_mesh_options(opts, info):
                 raise ValueError("paint spots need a size > 0")
             terms = [f"Sqrt((x-{_n(s['x'])})^2+(y-{_n(s['y'])})^2)-{_n(s.get('r') or 0)}"
                      for s in spots]
-            expr = terms[0]
-            for t in terms[1:]:
-                expr = f"Min({expr},{t})"
-            m = f.add("MathEval")
-            f.setString(m, "F", f"Max({expr},0)")
-            added.append(_ramp(m, size, 0.0, opts.get("paint_growth") or 1.2))
+            # chunks of 60 spots: a long nested Min(...) overflows gmsh's expression parser
+            for i in range(0, len(terms), 60):
+                chunk = terms[i:i + 60]
+                expr = chunk[0]
+                for t in chunk[1:]:
+                    expr = f"Min({expr},{t})"
+                m = f.add("MathEval")
+                f.setString(m, "F", f"Max({expr},0)")
+                added.append(_ramp(m, size, 0.0, opts.get("paint_growth") or 1.2))
         info["paint_spots"] = len(paint)
     if added:
         # combine with the builder's own background field (the Min not used by another Min)

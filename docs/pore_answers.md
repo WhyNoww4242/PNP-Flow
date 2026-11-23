@@ -25,7 +25,7 @@ test geometry, and report axial and radial profiles.
 - Pore length: the DNS section of the paper says the pores are 1 um long (a_p / l_p = 0.01);
   the OpenFOAM methods paragraph says 10 um. Default `L_nm = 1000`; set `L_nm=10000` for the other.
 - Pore end potential: "blocking" is applied to the ions. The potential on the end cap is taken
-  as the electrode potential Phi_w (`end_charged = 1`); `end_charged = 0` makes it uncharged.
+  as the electrode potential Phi_w (`phi_end_mV`, default = `phi_w_mV`; replaces the old `end_charged` switch, so an uncharged end is no longer an option).
 - No arc at the mouth (the OpenFOAM mesh had a smoothing arc); the sharp corner is refined
   instead (`h_entr`).
 - Axial mu(Z) is the cross-section average (weight r dr); the line on the axis is also saved

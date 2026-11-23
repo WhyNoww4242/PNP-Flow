@@ -18,6 +18,10 @@ except ImportError:          # pragma: no cover
     pypardiso = None
 
 
+# Elements per batch in the Jacobian kernel: bounds the jacfwd transient memory.
+ELEMENT_CHUNK = 20000
+
+
 class Assembler:
     """Builds R(U) and the sparse Jacobian dR/dU for a Model."""
 
@@ -47,7 +51,7 @@ class Assembler:
         self.nnz = len(unique)
         self.csr_rows = unique // m.ndof
         self.csr_cols = unique % m.ndof
-        self.slot = jnp.asarray(inverse)               # coo entry -> csr slot
+        self.slot = jnp.asarray(inverse.astype(np.int32))              # coo entry -> csr slot
         self.coo_is_dirichlet_row = jnp.asarray(m.is_dirichlet[rows])
         # csr slots of the diagonal of Dirichlet rows
         diag = (self.csr_rows == self.csr_cols) & m.is_dirichlet[self.csr_rows]
@@ -106,8 +110,10 @@ class Assembler:
 
         def jacobian_values(U, params):
             loc = U[emap]
-            k = jax.vmap(element_jac, in_axes=(0, 0, 0, 0, 0, None))(
-                loc, geo["G"], geo["wd"], geo["xq"], geo["h"], params)
+            k = jax.lax.map(
+                lambda a: element_jac(a[0], a[1], a[2], a[3], a[4], params),
+                (loc, geo["G"], geo["wd"], geo["xq"], geo["h"]),
+                batch_size=ELEMENT_CHUNK)
             parts = [k.reshape(-1)]
             for name, (_, jac) in edge_kernels.items():
                 e = m.edge[name]

@@ -10,7 +10,7 @@ JAX_PLATFORMS=cuda python run.py pore_charging --name pore_dns_<case> \
   --set alpha_in=<a0> --set alpha_out=<a1> \
   --set L_nm=10000 --set a_ref_nm=10 \
   --set phi_w_mV=10 --set c0_mM=0.948 --set eps=7.0832e-10 --set T=298.15 --set D=1.337e-9 \
-  --set end_charged=1 --set sdl_radius=2 --set sdl_length=501.5 \
+  --set phi_end_mV=10 --set sdl_radius=2 --set sdl_length=501.5 \
   --set tau_end=1.01 --set dns_times=1 --set dns_init=1
 ```
 

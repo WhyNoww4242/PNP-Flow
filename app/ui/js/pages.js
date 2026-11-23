@@ -31,7 +31,9 @@ function stub(text) {
 
 function pageShell(wb, title, lead, ...content) {
   return h("div.page", {}, h("div.page-pad", {}, h("div.wb-page", {},
-    h("h1", {}, icon(wb, 20), title), lead ? h("p.lead", {}, lead) : null, ...content)));
+    h("h1", {}, icon(wb, 32), title,
+      lead ? h("span.info-dot", { tabindex: "0", role: "img", "aria-label": `About ${title}: ${lead}`, "data-tip": String(lead) }, icon("info", 18)) : null),
+    ...content)));
 }
 
 function imageFigure(app, doc, file, caption, check) {
@@ -79,7 +81,7 @@ export function stepParams(app, doc, step, title, empty, { layout = "page" } = {
   const readonly = doc.kind === "run";
   return h("section.panel#step-params", {}, h("header.panel-head", {}, h("h2", { text: title }), h("span.spacer"),
       h("span.badge.b-warn.step-count", { dataset: { step }, hidden: !n || null }, `${n} changed`)),
-    h("div.panel-body.flush", {}, paramForm(app, doc, rows, { layout, empty, readonly })),
+    h("div.panel-body.flush", {}, paramForm(app, doc, rows, { layout, empty, readonly, expert: app.S.expert })),
     readonly ? resultFoot(app, doc)
       : h("div.panel-foot", { text: `Saved in cases/${doc.caseName}/case.json; applies to the next solve.` }));
 }

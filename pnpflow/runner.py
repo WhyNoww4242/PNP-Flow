@@ -478,11 +478,30 @@ def _write_mesh_status(case_dir, data):
 
 
 def _mesh_json(mesh, info, symmetry):
-    """Mesh outline for the app's mesh tools (nodes, triangles, named boundaries)."""
-    data = output.fields_json(mesh, {})
-    data["symmetry"] = symmetry
-    data["corners"] = info.get("corners", [])
-    return data
+    """Mesh for the app's mesh-tools canvas: corner nodes of each P2 triangle (straight
+    edges, a quarter of the size of fields.json), named boundary edges (with their
+    midside nodes, so curved walls stay curved), bbox and the corners found."""
+    tri = np.asarray(mesh.tri)
+    used = [tri[:, :3].ravel()]
+    edges = {}
+    for name, b in mesh.boundaries.items():
+        e = np.asarray(b["edges"])
+        used.append(e.ravel())
+        edges[name] = e
+    keep = np.unique(np.concatenate(used))
+    remap = np.full(int(tri.max()) + 1, -1, dtype=np.int64)
+    remap[keep] = np.arange(len(keep))
+    X = np.asarray(mesh.X)[keep]
+    return {
+        "symmetry": symmetry,
+        "nodes": np.round(X, 7).tolist(),
+        "triangles": remap[tri[:, :3]].tolist(),
+        "boundary_edges": {n: np.concatenate([remap[e[:, [0, 2]]], remap[e[:, [2, 1]]]]).tolist()
+                           for n, e in edges.items()},
+        "bbox": [float(X[:, 0].min()), float(X[:, 0].max()), float(X[:, 1].min()), float(X[:, 1].max())],
+        "corners": info.get("corners", []),
+        "n_elements": int(len(tri)),
+    }
 
 
 def _store_case_mesh(ctx, model, folder, info, log):

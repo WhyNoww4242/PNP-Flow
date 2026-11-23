@@ -36,7 +36,7 @@ TAU_EARLY = 0.13          # the paper's early time
 DEFAULTS = {
     "alpha_in": 1.0, "alpha_out": 1.0, "L_nm": 1000.0, "a_ref_nm": 10.0,
     "phi_w_mV": 10.0, "c0_mM": 0.94, "eps": 7.1e-10, "T": 298.15, "D": 1.34e-9,
-    "end_charged": 1.0, "sdl_radius": 0.0, "sdl_length": 0.0,
+    "phi_end_mV": 10.0, "sdl_radius": 0.0, "sdl_length": 0.0,
     "tau_end": 1.0, "tau_mid": 0.5,
     "h_wall": 0.0, "h_entr": 0.0, "h_far": 1.0,
     "dt0": 0.01, "rtol": 2e-3, "equilibrium_check": 1.0,
@@ -53,8 +53,9 @@ INFO = {
     "eps": "permittivity of water [F/m]",
     "T": "temperature [K] (sets V_T and lambda_D)",
     "D": "ion diffusivity [m^2/s] (dimensional time only)",
-    "end_charged": "1: the pore end Z = 1 is part of the electrode (phi = phi_w); "
-                   "0: uncharged (dphi/dn = 0). Ions are blocked either way",
+    "phi_end_mV": "potential of the closed pore end Z = 1 [mV]. Set it equal to phi_w_mV "
+                  "for an end that is part of the electrode (default 10 mV, same as the wall). "
+                  "Ions cannot pass the end",
     "sdl_radius": "SDL radius / a_ref (0 = 2 max alpha)",
     "sdl_length": "SDL length / a_ref (0 = L/2 + 1.5 max alpha; the 1.5 max alpha "
                   "is extra room for the access region at the mouth)",
@@ -114,7 +115,7 @@ def build_pore_charging(p):
     the pore 0 <= z <= L = l_p / a_ref with wall r = alpha(z / L), alpha linear.
     BCs: SDL far end z = -l_s: c+- = c0, phi = 0.  SDL side and face: uncharged
     (dphi/dn = 0), no ion flux.  Pore wall: phi = phi_w (step at t = 0, no Stern),
-    no ion flux.  Pore end: no ion flux, phi = phi_w (end_charged = 1) or uncharged.
+    no ion flux.  Pore end: no ion flux, phi = phi_end (phi_end_mV; the wall value for an electrode end).
     Initial state: c+- = c0 everywhere; phi follows from Poisson at the first step.
     Outputs at each tau: cross-section-averaged mu = rho + 2 Phi, Phi, rho along Z
     (SDL included at Z < 0) and radial Phi, rho, mu at Z = 0.5 vs R / alpha(0.5).
@@ -137,7 +138,8 @@ def build_pore_charging(p):
 
     species = [Species("c+", 1.0), Species("c-", -1.0)]
     params = {"delta": delta, "Pe": 1.0, "phi_w": phi_w}
-    end = {"phi": B.Dirichlet("phi_w")} if p["end_charged"] else {}
+    params["phi_end"] = thermal_potential(p["phi_end_mV"], p["T"])
+    end = {"phi": B.Dirichlet("phi_end")}
     bcs = {
         "axis": {},
         "sdl_side": {},
@@ -289,7 +291,7 @@ def build_pore_charging(p):
         f"V_T = {kP * p['T'] / eP * 1e3:.5g} mV, lambda_D = {lamP * 1e9:.5g} nm.",
         "DNS differences not matched (report only): DNS mouth is rounded, here a sharp "
         "corner refined with h_entr; DNS pore-end line has non-uniform phi, here the end "
-        "face is phi = phi_w (end_charged = 1) or uncharged; the DNS Biot number has no "
+        "face is phi = phi_end (phi_end_mV); the DNS Biot number has no "
         "equivalent here.",
     ]
     if p["dns_times"]:

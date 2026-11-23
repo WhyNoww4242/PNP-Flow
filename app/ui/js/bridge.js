@@ -96,6 +96,9 @@ const httpBridge = {
   buildMesh: (name, device) => getJSON(`/api/case/${enc(name)}/mesh`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device }),
   }),
+  deleteMesh: (name) => getJSON(`/api/case/${enc(name)}/delete-mesh`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  }),
   runCase: (name, body) => getJSON(`/api/case/${enc(name)}/run`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   }),
@@ -141,6 +144,7 @@ const tauriBridge = {
   caseFileURL: async () => "",
   saveCase: async () => { throw httpError(501, "cases need the dev server (python app/server.py) for now"); },
   buildMesh: async () => { throw httpError(501, "cases need the dev server for now"); },
+  deleteMesh: async () => { throw httpError(501, "cases need the dev server for now"); },
   runCase: async () => { throw httpError(501, "cases need the dev server for now"); },
   launch: (body) => call("launch_run", { request: body }),
   // the Tauri launcher does not pass a device yet: JAX picks (GPU when present)

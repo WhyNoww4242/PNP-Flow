@@ -95,7 +95,7 @@ STEP_RULES = [
     ("geometry", r"^(R|R_out|radius|length|width|half_width|upstream|downstream|L|H|W|L_nm|"
                  r"a_ref\w*|alpha_\w+|sdl_\w+|domain\w*|far_\w+)$"),
     ("materials", r"^(T|delta|d_\w+|D|eps\w*|c0\w*|bulk\w*|z_\w+|q)$"),
-    ("boundaries", r"^(zeta\w*|phi_w\w*|stern\w*|side_slip|end_charged|outer_bc|sigma\w*)$"),
+    ("boundaries", r"^(zeta\w*|phi_w\w*|phi_end\w*|stern\w*|side_slip|outer_bc|sigma\w*)$"),
     ("equations", r"^(Pe|Re|K|Ex|advection|supg)$"),
 ]
 MESH_STEPS = ("geometry", "mesh", "materials")   # materials: default sizes follow delta

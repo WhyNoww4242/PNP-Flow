@@ -11,7 +11,7 @@ constants in `docs/pore_answers.md` for these runs.
 | pore length | **10 um** (`L_nm=10000`, a_ref = 10 nm): follows the DNS files and pawel.py (tau = 13.37 t[s] only holds for 10 um). If the schematic (1 um) is right, the pawel.py time conversion is wrong too |
 | constants | `c0_mM=0.948 eps=7.0832e-10 T=298.15 D=1.337e-9 phi_w_mV=10`; pnpflow keeps CODATA constants (V_T 25.693 mV, lambda_D 9.9740 nm) vs pawel.py (25.680 mV, 9.9716 nm): report both, do not change |
 | SDL | `sdl_radius=2 sdl_length=501.5` (pnpflow defaults; equal to the DNS 5.015 um) |
-| end | `end_charged=1`, `tau_end=1.01` |
+| end | `phi_end_mV=10` (= wall; replaces `end_charged`), `tau_end=1.01` |
 | output times | tau_k = 0.06685 k, k = 0..15 (t = 0, 0.005, ..., 0.075 s, the DNS folder times); these are the saved times in `solution.npz` (`U_t`) |
 | initial state | DNS state (phi = phi_w in the pore, c = c0) via a **new option**; the default stays as it is |
 | mesh | dry run first (build + diagnose all four meshes, estimate memory) before any solve; if a mesh does not fit, a slightly coarser `h_wall` is allowed |

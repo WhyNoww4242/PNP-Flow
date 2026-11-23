@@ -44,10 +44,20 @@ OUT = os.path.join(ROOT, "results", "pore_dns_compare")
 
 
 def run_folder(case):
+    """results/pore_dns_<case>[_coarse] (queue script), else the newest finished run of
+    the case cases/pore_dns_<case>[_coarse] (runs started from the app)."""
     for name in (f"pore_dns_{case}", f"pore_dns_{case}_coarse"):
         f = os.path.join(ROOT, "results", name)
         if os.path.exists(os.path.join(f, "profiles.json")):
             return f
+    for name in (f"pore_dns_{case}", f"pore_dns_{case}_coarse"):
+        rdir = os.path.join(ROOT, "cases", name, "results")
+        if not os.path.isdir(rdir):
+            continue
+        runs = [os.path.join(rdir, r) for r in os.listdir(rdir)
+                if os.path.exists(os.path.join(rdir, r, "profiles.json"))]
+        if runs:
+            return max(runs, key=lambda f: os.path.getmtime(os.path.join(f, "profiles.json")))
     return None
 
 

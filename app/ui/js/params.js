@@ -20,7 +20,7 @@ const STEP_RULES = [
   ["mesh", /^(h|h_\w+|\w+_size|n_elem\w*|refine\w*)$/],
   ["geometry", /^(R|R_out|radius|length|width|half_width|upstream|downstream|L|H|W|L_nm|a_ref\w*|alpha_\w+|sdl_\w+|domain\w*|far_\w+)$/],
   ["materials", /^(T|delta|d_\w+|D|eps\w*|c0\w*|bulk\w*|z_\w+|q)$/],
-  ["boundaries", /^(zeta\w*|phi_w\w*|stern\w*|side_slip|end_charged|outer_bc|sigma\w*)$/],
+  ["boundaries", /^(zeta\w*|phi_w\w*|stern\w*|side_slip|phi_end\w*|outer_bc|sigma\w*)$/],
   ["equations", /^(Pe|Re|K|Ex|advection|supg)$/],
 ];
 

@@ -22,6 +22,7 @@ GET  /api/case/<case>                case.json, mesh status, mesh files, runs
 GET  /api/case/<case>/file/mesh/<f>  view_a.png view_b.png validation.json mesh.json mesh.log
 POST /api/case/<case>/save           {"case": {...}, "create": bool}  writes case.json
 POST /api/case/<case>/mesh           {"device"}  builds the mesh only (run.py --mesh-only)
+POST /api/case/<case>/delete-mesh    removes the generated mesh files of the case (case.json and runs stay)
 POST /api/case/<case>/run            {"name", "device", "overwrite"}  starts a run of the case
 Run names stay unique across results/ and every case, so /api/run/<name> keeps working.
 """
@@ -157,8 +158,26 @@ def run_name_taken(name):
     return bool(p and os.path.isdir(p) and os.listdir(p))
 
 
+def _log_failure(path):
+    """If the last mesh build died before writing status.json, say why (last error line of
+    mesh.log). None when there is no log or its build did not fail."""
+    try:
+        with open(os.path.join(path, "mesh", "mesh.log"), encoding="utf-8", errors="replace") as f:
+            lines = [ln.rstrip() for ln in f.read().splitlines() if ln.strip()]
+    except OSError:
+        return None
+    if not lines or not re.match(r"# process exited with code (?!0\b)\d+", lines[-1]):
+        return None
+    body = [ln for ln in lines[:-1] if not ln.startswith("#")]
+    return (body[-1] if body else lines[-1]).strip()
+
+
 def mesh_status(name, path):
     st = hud.read_json(os.path.join(path, "mesh", "status.json")) or {"state": "none"}
+    if st.get("state") == "none":
+        why = _log_failure(path)
+        if why:
+            st = {"state": "failed", "error": why + " (see mesh.log)"}
     with MESH_LOCK:
         entry = MESH_PROCS.get(name)
     alive = bool(entry and entry["proc"].poll() is None)
@@ -233,6 +252,9 @@ def _spawn(cmd, log_path, device, header):
     log.write("# %s %s\n# %s\n# device: %s\n" % (header, time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(cmd), device))
     log.flush()
     env = dict(os.environ, PYTHONUNBUFFERED="1")
+    # Allocate GPU memory on demand: the default BFC pool was capped at 3.7 GiB on WSL2.
+    env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+    env.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
     if device in hud.DEVICE_ENV:
         env["JAX_PLATFORMS"] = hud.DEVICE_ENV[device]
     else:
@@ -265,6 +287,33 @@ def build_mesh(name, body):
         MESH_PROCS[name] = {"proc": proc, "started": time.time(), "log": log}
     threading.Thread(target=hud._reap, args=("mesh:" + name, proc, log), daemon=True).start()
     return 200, {"ok": True, "pid": proc.pid}
+
+
+MESH_FILES = ("case.msh", "mesh.json", "status.json", "validation.json", "view_a.png", "view_b.png", "mesh.log")
+
+
+def delete_mesh(name, body):
+    """Remove the generated mesh of a case. Only the known generated files go; case.json and
+    the runs (each keeps its own frozen mesh copy) are untouched."""
+    path = case_path(name)
+    if not path or not os.path.isfile(os.path.join(path, "case.json")):
+        return 404, {"error": "no such case"}
+    with MESH_LOCK:
+        e = MESH_PROCS.get(name)
+        if e and e["proc"].poll() is None:
+            return 409, {"error": "the mesh of '%s' is being built; wait for it to finish" % name}
+    mdir = os.path.join(path, "mesh")
+    removed = []
+    for f in MESH_FILES:
+        fp = os.path.join(mdir, f)
+        if os.path.isfile(fp):
+            os.remove(fp)
+            removed.append(f)
+    try:
+        os.rmdir(mdir)
+    except OSError:
+        pass                                        # other files in there: leave them
+    return 200, {"ok": True, "removed": removed}
 
 
 def run_case_api(name, body):
@@ -371,7 +420,7 @@ class AppHandler(hud.Handler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        m = re.match(r"^/api/case/([^/]+)/(save|mesh|run)$", path)
+        m = re.match(r"^/api/case/([^/]+)/(save|mesh|run|delete-mesh)$", path)
         if not m:
             return super().do_POST()
         try:
@@ -382,7 +431,7 @@ class AppHandler(hud.Handler):
         if not case_path(name):
             return self.send_error_json(400, "invalid case name")
         try:
-            status, obj = {"save": save_case, "mesh": build_mesh, "run": run_case_api}[action](name, body)
+            status, obj = {"save": save_case, "mesh": build_mesh, "run": run_case_api, "delete-mesh": delete_mesh}[action](name, body)
         except Exception as e:                       # never kill the server on a bad request
             status, obj = 500, {"error": "%s: %s" % (type(e).__name__, e)}
         self.send_json(obj, status)

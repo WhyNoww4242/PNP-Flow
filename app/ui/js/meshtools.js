@@ -8,6 +8,7 @@ import { h, setChildren, fmt, fmtValue, isNum, placeholder } from "./util.js";
 import { icon } from "./icons.js";
 import { bridge, optional } from "./bridge.js";
 import { boundaryColor } from "./fieldview.js";
+import { repairWorkspace } from "./repair.js";
 
 const ORDER = { fail: 0, warn: 1, pass: 2, info: 3 };
 const WORD = { pass: "pass", warn: "warning", fail: "fail", info: "info" };
@@ -115,6 +116,78 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
   }
   drawValidation();
 
+  // ---- Repair mesh: a tree of the checks below the state row (FreeCAD model-tree look) ----
+  const rSlot = h("div");
+  let grid = null;
+  const repairButton = (busy) => h("button.btn", { type: "button", disabled: busy || null, "aria-expanded": String(!!doc._repairOpen),
+    "data-tip-title": "Repair mesh", "data-tip": "Lists the failed and warned mesh checks as a tree, with the fix for each. Where a fix can be applied, one click edits the mesh settings; then create the mesh again.",
+    onclick: () => { doc._repairOpen = !doc._repairOpen; drawRepair(); drawState(); } }, icon("wrench", 14), "Repair mesh");
+  const deleteButton = (busy) => {
+    const b = h("button.btn", { type: "button", disabled: busy || null, "data-tip-title": "Delete mesh",
+      "data-tip": "Removes the generated mesh files of this case (mesh, views, validation). case.json and earlier runs stay. Click twice to confirm.",
+      onclick: () => {
+        if (b.dataset.armed) { clearTimeout(b._t); app.deleteMesh(doc); return; }
+        b.dataset.armed = "1"; b.classList.add("danger"); setChildren(b, icon("trash", 14), "Click again to delete");
+        b._t = setTimeout(() => { delete b.dataset.armed; b.classList.remove("danger"); setChildren(b, icon("trash", 14), "Delete mesh"); }, 4000);
+      } }, icon("trash", 14), "Delete mesh");
+    return b;
+  };
+  const wsHost = h("div");
+  let ws = null;
+  const autoFix = (c) => {
+    // EDL resolution: refine the named wall to delta/8 inside 3 delta
+    if (c.name !== "EDL resolution") return null;
+    const b = /'([^']+)'/.exec(c.fix || ""), d = /delta = ([0-9.eE+-]+)/.exec(c.note || "");
+    const delta = d ? Number(d[1]) : NaN;
+    if (!b || !Number.isFinite(delta) || delta <= 0) return null;
+    return { label: `Refine ${b[1]} to delta/8`, run: () => {
+      const size = Number((delta / 8 * 0.85).toPrecision(3)), layer = Number((3 * delta).toPrecision(3));
+      const row = mesh.boundaries.find((x) => x.boundary === b[1]);
+      if (row) { row.size = Math.min(row.size || size, size); row.layer = Math.max(row.layer || 0, layer); }
+      else mesh.boundaries.push({ boundary: b[1], size, layer, growth: 1.2 });
+      save(); drawBoundaries(); draw(); drawRepair();
+      app.toast(`Boundary refinement on ${b[1]}: size ${size}, layer ${layer}. Create the mesh to apply it.`, "ok");
+    } };
+  };
+  const drawRepair = () => {
+    if (grid) grid.hidden = !!doc._repairOpen;
+    wsHost.hidden = !doc._repairOpen;
+    if (doc._repairOpen && !ws) {
+      ws = repairWorkspace(app, doc, { mesh, save, defaultSize, numInput, field, leftSlot: rSlot,
+        touched: () => { drawBoundaries(); drawRegions(); drawPaintCount(); draw(); } });
+      setChildren(wsHost, ws);
+    }
+    if (doc._repairOpen && ws) requestAnimationFrame(() => ws._draw());
+    if (!doc._repairOpen) return;
+    const checks = (doc.caseValidation && doc.caseValidation.checks) || null;
+    const bad = checks ? checks.filter((c) => c.status === "fail" || c.status === "warn")
+      .sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9)) : [];
+    const open = (doc._repairOpenRows ||= {});
+    const rows = [];
+    if (!checks) rows.push(h("div.tree-note", { text: "No validation yet. Create the mesh first; its checks appear here." }));
+    else if (!bad.length) rows.push(h("div.tn.muted", { style: { cursor: "default" } }, h("span.tn-tw.leaf"), icon("check-circle", 15),
+      h("span.tn-label", { text: "Nothing to repair: every check passes" })));
+    for (const c of bad) {
+      const isOpen = open[c.name] !== false;
+      const fix = autoFix(c);
+      rows.push(h("div.tn", { role: "treeitem", tabindex: "0", "aria-expanded": String(isOpen), style: { "--depth": 0 },
+        onclick: () => { open[c.name] = !isOpen; drawRepair(); },
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open[c.name] = !isOpen; drawRepair(); } } },
+        h("span.tn-tw", {}, icon("chevron-right", 12)), icon(c.status === "fail" ? "x-circle" : "alert", 15),
+        h("span.tn-label", { text: c.name }), h("span.tn-meta", { text: `${fmtValue(c.value)} / ${fmtValue(c.limit)}` })));
+      if (isOpen) rows.push(h("div.rp-detail", {},
+        h("p", { text: c.note || "" }),
+        c.fix ? h("p", {}, h("b", { text: "Fix: " }), c.fix) : null,
+        fix ? h("button.btn.sm.primary", { type: "button", onclick: fix.run }, icon("wrench", 14), fix.label) : null));
+    }
+    setChildren(rSlot, h("section.panel.repair-panel", {},
+      h("div.combo-head", {}, icon("wrench", 15), h("span.panel-title", { text: "Repair mesh" }),
+        h("span.props-sub", { text: checks ? `${bad.length} to repair` : "" }), h("span.spacer", { style: { flex: "1" } }),
+        h("button.icon-btn", { type: "button", "aria-label": "Close repair", onclick: () => { doc._repairOpen = false; drawRepair(); drawState(); } }, icon("x", 14))),
+      h("div.tree", { role: "tree", "aria-label": "Mesh checks to repair" }, rows),
+      h("p.tree-note", { text: "Applying a fix edits the mesh settings in case.json only. Create the mesh again to see the result." })));
+  };
+
   // ---- state line + build ----
   const stateLine = h("div.mesh-state");
   const drawState = () => {
@@ -129,12 +202,14 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     } else { badge = statusBadge("info", "no mesh yet"); text = "Create the mesh to check it before solving (Solve also creates it)."; }
     const busy = st.state === "building";
     setChildren(stateLine, badge, h("span.mesh-state-txt", { text }), h("span.spacer"),
+      st.state === "none" ? null : deleteButton(busy),
+      repairButton(busy),
       createMeshButton(app, doc, busy),
       st.state === "failed" ? h("a.btn", { href: "#", onclick: async (e) => { e.preventDefault(); const u = await bridge.caseFileURL(doc.caseName, "mesh/mesh.log"); window.open(u, "_blank", "noopener"); } }, icon("terminal", 14), "mesh.log") : null);
   };
   drawState();
   doc._onMeshPoll = drawState;
-  doc._onCaseSaved = () => { drawState(); drawValidation(); updateEstimate(); };
+  doc._onCaseSaved = () => { drawState(); drawValidation(); drawRepair(); updateEstimate(); };
 
   // ---- density ----
   const built = (ms.info && ms.info.density) || 1;
@@ -257,15 +332,28 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     g.fillStyle = css("--plot-bg"); g.fillRect(0, 0, canvas.width, canvas.height);
     if (!geom) return;
     if (!view.k) fit();
-    // mesh edges
+    // mesh edges. Large meshes (10^5–10^6 triangles): skip triangles off screen, and
+    // draw triangles under ~2 px as one shaded pixel instead of three lines, so a frame
+    // stays a single cheap pass however fine the mesh is.
+    const P = geom.nodes;
+    const W = canvas.width, H = canvas.height;
+    const k = view.k, ox = W / 2 - view.cx * k, oy = H / 2 + view.cy * k;
+    const tiny = 2 * dpr;
     g.lineWidth = 1;
     g.strokeStyle = css("--border-strong");
+    g.fillStyle = css("--border-strong");
     g.beginPath();
-    const P = geom.nodes;
-    for (const t of geom.triangles) {
-      const [ax, ay] = toScreen(P[t[0]][0], P[t[0]][1]);
-      const [bx, by] = toScreen(P[t[1]][0], P[t[1]][1]);
-      const [cx, cy] = toScreen(P[t[2]][0], P[t[2]][1]);
+    const T = geom.triangles;
+    for (let i = 0; i < T.length; i++) {
+      const t = T[i];
+      const a = P[t[0]], b = P[t[1]], c = P[t[2]];
+      const ax = a[0] * k + ox, ay = oy - a[1] * k;
+      const bx = b[0] * k + ox, by = oy - b[1] * k;
+      const cx = c[0] * k + ox, cy = oy - c[1] * k;
+      const x0 = Math.min(ax, bx, cx), x1 = Math.max(ax, bx, cx);
+      const y0 = Math.min(ay, by, cy), y1 = Math.max(ay, by, cy);
+      if (x1 < 0 || y1 < 0 || x0 > W || y0 > H) continue;
+      if (x1 - x0 < tiny && y1 - y0 < tiny) { g.fillRect(x0 | 0, y0 | 0, 1, 1); continue; }
       g.moveTo(ax, ay); g.lineTo(bx, by); g.lineTo(cx, cy); g.closePath();
     }
     g.stroke();
@@ -416,13 +504,14 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
   });
 
   setChildren(root, pageShell("mesh", "Mesh", "The case's mesh lives in cases/" + doc.caseName + "/mesh/. Tools here change case.json; build to check the result before solving.",
-    vSlot, h("div.panel.mesh-state-panel", {}, stateLine),
-    h("div.mt-grid", {},
+    h("div.panel.mesh-state-panel", {}, stateLine), wsHost, vSlot,
+    grid = h("div.mt-grid", {},
       h("div.stack", {}, densityPanel,
         panel("Boundary refinement", bBody),
         panel("Refinement regions", rBody),
         cornerPanel, paintPanel,
         stepParams(app, doc, "mesh", "Template mesh sizes", "This template sets its sizes from the Debye length; it has no size parameters.")),
       h("div.stack", {}, canvasPanel, views.length ? h("div.mesh-views", {}, views) : null))));
+  drawRepair();
   requestAnimationFrame(draw);
 }

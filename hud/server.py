@@ -39,9 +39,31 @@ HUD_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HUD_DIR, "static")
 ROOT = os.path.dirname(HUD_DIR)
 
+def default_python():
+    """Interpreter for run.py: PNPFLOW_PYTHON, else this one if it has JAX, else the pnpflow
+    conda env (so the server also works when started with the system Python)."""
+    if os.environ.get("PNPFLOW_PYTHON"):
+        return os.environ["PNPFLOW_PYTHON"]
+    import importlib.util
+    if importlib.util.find_spec("jax") is not None:
+        return sys.executable
+    home = os.path.expanduser("~")
+    bases = [os.environ.get("CONDA_PREFIX_1"), os.environ.get("CONDA_EXE") and os.path.dirname(os.path.dirname(os.environ["CONDA_EXE"]))]
+    bases += [os.path.join(home, d) for d in ("miniconda3", "anaconda3", "miniforge3", "mambaforge", "micromamba")]
+    cands = [b and os.path.join(b, "envs", "pnpflow") for b in bases]
+    cp = os.environ.get("CONDA_PREFIX")
+    if cp and os.path.basename(cp) == "pnpflow":
+        cands.insert(0, cp)
+    for c in cands:
+        py = c and os.path.join(c, "bin", "python")
+        if py and os.path.isfile(py):
+            return py
+    return sys.executable
+
+
 # Set from the command line in main()
 CONFIG = {"results": os.path.join(ROOT, "results"),
-          "python": os.environ.get("PNPFLOW_PYTHON", sys.executable)}
+          "python": default_python()}
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}$")
 CASE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,63}$")

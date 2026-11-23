@@ -140,6 +140,7 @@ function status(text) {
   $("#sb-msg").textContent = text;
 }
 
+const TIP_DELAY_MS = 3500;
 const tip = { el: null, timer: 0, target: null };
 function tipContent(target) {
   const title = target.dataset.tipTitle || "";
@@ -177,7 +178,7 @@ function initTooltips() {
     hideTip();
     if (!t || document.querySelector(".menu.open")) return;   // no tooltips over an open menu
     tip.target = t;
-    tip.timer = setTimeout(() => tip.target === t && t.isConnected && showTip(t), e.type === "focusin" ? 0 : 380);
+    tip.timer = setTimeout(() => tip.target === t && t.isConnected && showTip(t), TIP_DELAY_MS);
   };
   document.addEventListener("mouseover", over);
   document.addEventListener("focusin", over);
@@ -969,6 +970,20 @@ app.buildMesh = async (d) => {
   }
   d.caseDetail = await bridge.caseDetail(d.caseName).catch(() => d.caseDetail);
   d.meshBuilding = true;
+  renderAll();
+};
+
+app.deleteMesh = async (d) => {
+  if (d.kind !== "case") return;
+  try {
+    await bridge.deleteMesh(d.caseName);
+  } catch (e) {
+    app.toast(`Could not delete the mesh: ${e.message}`, "error");
+    return;
+  }
+  d.caseMesh = null; d.caseValidation = undefined; d._repairOpen = false;
+  d.caseDetail = await bridge.caseDetail(d.caseName).catch(() => d.caseDetail);
+  app.toast("Mesh deleted. case.json and earlier runs are untouched; create the mesh again when needed.", "ok");
   renderAll();
 };
 
