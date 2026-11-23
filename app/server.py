@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """pnpflow desktop app — development server (Python stdlib only).
 
-Serves the app front end in app/ui and the same JSON API as hud/server.py, by
-importing that module and subclassing its request handler (hud/ is not
-modified, and the old HUD keeps working on its own port).
+Serves the app front end in app/ui and the JSON API of app/api.py, by importing
+that module and subclassing its request handler.
 
     python app/server.py [--port 8766] [--host 127.0.0.1] [--results DIR] [--python EXE]
 
-Extra over the HUD API
+Extra over the base API (app/api.py)
 ----------------------
 GET /api/run/<name>                 listing also has "figures", "svgs", "mesh_files"
 GET /api/runs                       each entry also has "thumb" (relative file path or null)
@@ -45,16 +44,16 @@ UI_DIR = os.path.join(APP_DIR, "ui")
 ROOT = os.path.dirname(APP_DIR)
 
 
-def _load_hud():
-    """Import hud/server.py under a private module name (avoids clashing with this file)."""
-    path = os.path.join(ROOT, "hud", "server.py")
-    spec = importlib.util.spec_from_file_location("pnpflow_hud_server", path)
+def _load_api():
+    """Import app/api.py by path under a private name (works however this file is started)."""
+    path = os.path.join(APP_DIR, "api.py")
+    spec = importlib.util.spec_from_file_location("pnpflow_app_api", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-hud = _load_hud()
+api = _load_api()
 
 
 def _load_project():
@@ -75,7 +74,7 @@ MESH_RE = re.compile(r"^mesh/(view_a\.png|view_b\.png|diagnose\.json)$")
 MESH_FILES = ("mesh/view_a.png", "mesh/view_b.png", "mesh/diagnose.json")
 
 
-hud.RUN_FILES.update({"convergence.txt", "case.json"})
+api.RUN_FILES.update({"convergence.txt", "case.json"})
 
 # ---------------------------------------------------------------------------
 # Cases
@@ -115,13 +114,13 @@ def case_run_dirs():
         rdir = os.path.join(cases_dir(), c, "results")
         if os.path.isdir(rdir):
             for r in os.listdir(rdir):
-                if hud.NAME_RE.match(r) and os.path.isdir(os.path.join(rdir, r)):
+                if api.NAME_RE.match(r) and os.path.isdir(os.path.join(rdir, r)):
                     out.append((r, os.path.join(rdir, r), c))
     return out
 
 
-_legacy_run_path = hud.run_path
-_legacy_list_runs = hud.list_runs
+_legacy_run_path = api.run_path
+_legacy_list_runs = api.list_runs
 
 
 def run_path(name):
@@ -140,7 +139,7 @@ def list_runs():
     runs = _legacy_list_runs()
     for r, path, c in case_run_dirs():
         try:
-            e = hud.run_entry(r, path)
+            e = api.run_entry(r, path)
         except OSError:
             continue
         e["project"] = c
@@ -149,8 +148,8 @@ def list_runs():
     return runs
 
 
-hud.run_path = run_path
-hud.list_runs = list_runs
+api.run_path = run_path
+api.list_runs = list_runs
 
 
 def run_name_taken(name):
@@ -173,7 +172,7 @@ def _log_failure(path):
 
 
 def mesh_status(name, path):
-    st = hud.read_json(os.path.join(path, "mesh", "status.json")) or {"state": "none"}
+    st = api.read_json(os.path.join(path, "mesh", "status.json")) or {"state": "none"}
     if st.get("state") == "none":
         why = _log_failure(path)
         if why:
@@ -191,7 +190,7 @@ def mesh_status(name, path):
 
 def case_summary(name):
     path = case_path(name)
-    case = hud.read_json(os.path.join(path, "case.json")) or {}
+    case = api.read_json(os.path.join(path, "case.json")) or {}
     st = mesh_status(name, path)
     runs = [r for r, _, c in case_run_dirs() if c == name]
     return {"name": name, "template": case.get("template"), "description": case.get("description", ""),
@@ -199,7 +198,7 @@ def case_summary(name):
             "mesh": {k: st.get(k) for k in ("state", "key", "finished", "error")}
                     | {"n_elements": (st.get("stats") or {}).get("n_elements"),
                        "up_to_date": st.get("state") == "done" and st.get("key") == _safe_key(case)},
-            "runs": runs, "mtime": hud.latest_mtime(path)}
+            "runs": runs, "mtime": api.latest_mtime(path)}
 
 
 def _safe_key(case):
@@ -212,7 +211,7 @@ def _safe_key(case):
 def case_detail(name):
     path = case_path(name)
     out = case_summary(name)
-    out["case"] = hud.read_json(os.path.join(path, "case.json"))
+    out["case"] = api.read_json(os.path.join(path, "case.json"))
     st = mesh_status(name, path)
     try:
         st["current_key"] = project.mesh_key(out["case"] or {})
@@ -223,7 +222,7 @@ def case_detail(name):
     out["mesh"]["up_to_date"] = st["up_to_date"]
     out["mesh_files"] = sorted("mesh/" + f for f in os.listdir(os.path.join(path, "mesh"))
                                if CASE_FILE_RE.match("mesh/" + f)) if os.path.isdir(os.path.join(path, "mesh")) else []
-    out["run_entries"] = [dict(hud.run_entry(r, p), project=name) for r, p, c in case_run_dirs() if c == name]
+    out["run_entries"] = [dict(api.run_entry(r, p), project=name) for r, p, c in case_run_dirs() if c == name]
     return out
 
 
@@ -232,7 +231,7 @@ def save_case(name, body):
     if not path:
         return 400, {"error": "invalid case name (letters, digits, _ . - only)"}
     case = body.get("case")
-    if not isinstance(case, dict) or not isinstance(case.get("template"), str) or not hud.CASE_RE.match(case["template"]):
+    if not isinstance(case, dict) or not isinstance(case.get("template"), str) or not api.CASE_RE.match(case["template"]):
         return 400, {"error": "case must be an object with a template name"}
     target = os.path.join(path, "case.json")
     if body.get("create") and os.path.exists(target):
@@ -255,8 +254,8 @@ def _spawn(cmd, log_path, device, header):
     # Allocate GPU memory on demand: the default BFC pool was capped at 3.7 GiB on WSL2.
     env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     env.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
-    if device in hud.DEVICE_ENV:
-        env["JAX_PLATFORMS"] = hud.DEVICE_ENV[device]
+    if device in api.DEVICE_ENV:
+        env["JAX_PLATFORMS"] = api.DEVICE_ENV[device]
     else:
         env.pop("JAX_PLATFORMS", None)
     proc = subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
@@ -278,14 +277,14 @@ def build_mesh(name, body):
         if e and e["proc"].poll() is None:
             return 409, {"error": "the mesh of '%s' is already being built" % name}
     os.makedirs(os.path.join(path, "mesh"), exist_ok=True)
-    cmd = [hud.CONFIG["python"], "-u", os.path.join(ROOT, "run.py"), "--case", path, "--mesh-only"]
+    cmd = [api.CONFIG["python"], "-u", os.path.join(ROOT, "run.py"), "--case", path, "--mesh-only"]
     try:
         proc, log = _spawn(cmd, os.path.join(path, "mesh", "mesh.log"), device, "mesh build")
     except OSError as e:
         return 500, {"error": "spawn failed: %s" % e}
     with MESH_LOCK:
         MESH_PROCS[name] = {"proc": proc, "started": time.time(), "log": log}
-    threading.Thread(target=hud._reap, args=("mesh:" + name, proc, log), daemon=True).start()
+    threading.Thread(target=api._reap, args=("mesh:" + name, proc, log), daemon=True).start()
     return 200, {"ok": True, "pid": proc.pid}
 
 
@@ -321,12 +320,12 @@ def run_case_api(name, body):
     if not path or not os.path.isfile(os.path.join(path, "case.json")):
         return 404, {"error": "no such case"}
     run = str(body.get("name", ""))
-    if not hud.NAME_RE.match(run):
+    if not api.NAME_RE.match(run):
         return 400, {"error": "invalid run name (letters, digits, _ . - only)"}
     device = str(body.get("device") or "auto")
     if device not in ("auto", "cpu", "gpu"):
         return 400, {"error": "device must be auto, cpu or gpu"}
-    st = hud.proc_status(run)
+    st = api.proc_status(run)
     if st and st["alive"]:
         return 409, {"error": "run '%s' is already running" % run}
     folder = os.path.join(path, "results", run)
@@ -339,14 +338,14 @@ def run_case_api(name, body):
         if e and e["proc"].poll() is None:
             return 409, {"error": "the mesh is still being built; wait for it to finish"}
     os.makedirs(folder, exist_ok=True)
-    cmd = [hud.CONFIG["python"], "-u", os.path.join(ROOT, "run.py"), "--case", path, "--name", run]
+    cmd = [api.CONFIG["python"], "-u", os.path.join(ROOT, "run.py"), "--case", path, "--name", run]
     try:
         proc, log = _spawn(cmd, os.path.join(folder, "stdout.log"), device, "launched by app")
     except OSError as e:
         return 500, {"error": "spawn failed: %s" % e}
-    with hud.PROCS_LOCK:
-        hud.PROCS[run] = {"proc": proc, "started": time.time(), "cmd": cmd, "log": log, "device": device}
-    threading.Thread(target=hud._reap, args=(run, proc, log), daemon=True).start()
+    with api.PROCS_LOCK:
+        api.PROCS[run] = {"proc": proc, "started": time.time(), "cmd": cmd, "log": log, "device": device}
+    threading.Thread(target=api._reap, args=(run, proc, log), daemon=True).start()
     return 200, {"ok": True, "name": run, "pid": proc.pid, "device": device}
 
 
@@ -370,7 +369,7 @@ def thumb_for(path):
                 return "figures/" + want
         pref = [f for f in figs if f.startswith("field")]
         return "figures/" + (pref or figs)[0]
-    plots = list_dir(path, "plots", hud.PLOT_RE)
+    plots = list_dir(path, "plots", api.PLOT_RE)
     plots = [p for p in plots if p.lower().endswith(".png")]
     if plots:
         for want in ("field_phi.png", "field_cplus.png"):
@@ -389,8 +388,8 @@ def launch_info(name, path):
     """Case and --set values of a run that has no summary.json yet: from the launch
     command this server holds, else from the command line the launcher writes at the
     top of stdout.log. Returns (case or None, {key: value})."""
-    with hud.PROCS_LOCK:
-        entry = hud.PROCS.get(name)
+    with api.PROCS_LOCK:
+        entry = api.PROCS.get(name)
     if entry and entry.get("cmd"):
         text = " ".join(entry["cmd"]) + " "
     else:
@@ -409,7 +408,7 @@ def launch_info(name, path):
     return (m.group(1) if m else None), params
 
 
-class AppHandler(hud.Handler):
+class AppHandler(api.Handler):
     server_version = "pnpflow-app/0.1"
 
     def log_message(self, fmt, *args):
@@ -455,21 +454,21 @@ class AppHandler(hud.Handler):
                 return self.send_file(target, "text/plain" if target.endswith(".log") else None)
             return self.send_error_json(404, "unknown case file")
         if rest == "runs":
-            runs = hud.list_runs()
+            runs = api.list_runs()
             for r in runs:
-                p = hud.run_path(r["name"])
+                p = api.run_path(r["name"])
                 r["thumb"] = thumb_for(p) if p else None
                 if not r.get("case") and p:
                     r["case"] = launch_info(r["name"], p)[0]
-            return self.send_json({"runs": runs, "results": hud.results_dir()})
+            return self.send_json({"runs": runs, "results": api.results_dir()})
         if rest.startswith("run/"):
             parts = rest[4:].split("/", 1)
             name = parts[0]
-            run_dir = hud.run_path(name)
+            run_dir = api.run_path(name)
             if not run_dir or not os.path.isdir(run_dir):
                 return self.send_error_json(404, "no such run")
             if len(parts) == 1 or parts[1] == "":
-                listing = hud.run_listing(name, run_dir)
+                listing = api.run_listing(name, run_dir)
                 listing["figures"] = list_dir(run_dir, "figures", FIG_RE)
                 listing["svgs"] = list_dir(run_dir, "svg", SVG_RE)
                 listing["mesh_files"] = [f for f in MESH_FILES
@@ -518,20 +517,20 @@ def main():
     ap = argparse.ArgumentParser(description="pnpflow app dev server")
     ap.add_argument("--port", type=int, default=int(os.environ.get("PNPFLOW_APP_PORT", 8766)))
     ap.add_argument("--host", default=os.environ.get("PNPFLOW_APP_HOST", "127.0.0.1"))
-    ap.add_argument("--results", default=hud.CONFIG["results"], help="results directory")
-    ap.add_argument("--python", default=hud.CONFIG["python"], help="interpreter used for run.py")
+    ap.add_argument("--results", default=api.CONFIG["results"], help="results directory")
+    ap.add_argument("--python", default=api.CONFIG["python"], help="interpreter used for run.py")
     ap.add_argument("--cases", default=CONF["cases"], help="cases directory")
     args = ap.parse_args()
     CONF["cases"] = os.path.abspath(args.cases)
-    hud.CONFIG["results"] = os.path.abspath(args.results)
-    hud.CONFIG["python"] = args.python
+    api.CONFIG["results"] = os.path.abspath(args.results)
+    api.CONFIG["python"] = args.python
     mimetypes.add_type("application/javascript", ".js")
     mimetypes.add_type("text/css", ".css")
     mimetypes.add_type("image/svg+xml", ".svg")
     srv = ThreadingHTTPServer((args.host, args.port), AppHandler)
     srv.daemon_threads = True
     host = "localhost" if args.host in ("0.0.0.0", "127.0.0.1", "") else args.host
-    print("pnpflow app: http://%s:%d/   (results: %s)" % (host, args.port, hud.CONFIG["results"]),
+    print("pnpflow app: http://%s:%d/   (results: %s)" % (host, args.port, api.CONFIG["results"]),
           flush=True)
     try:
         srv.serve_forever()

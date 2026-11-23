@@ -103,8 +103,8 @@ dense enough to keep everything in view, and always honest about state (is the m
 the solver converging, did the checks pass).
 
 It follows impeccable's **Operate** mode: scanability, consistency and native desktop
-behaviour come before expression. The look carries over from the existing HUD (`hud/`),
-which the user likes: dark blue-grey neutrals, one sky-blue accent, Inter for text and a
+behaviour come before expression. The look carries over from the former HUD dashboard (removed 2026-11-23; its
+viewer lives on in `app/ui/js/fieldview.js`), which the user likes: dark blue-grey neutrals, one sky-blue accent, Inter for text and a
 monospace face for numbers. The rejected reference is COMSOL's dated, crowded chrome.
 
 **Key Characteristics:**

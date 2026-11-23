@@ -3,3 +3,4 @@ __pycache__/
 results/
 cases/*/results/
 cases/*/mesh/
+DNS_compare/

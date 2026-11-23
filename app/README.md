@@ -24,7 +24,7 @@ Open **http://localhost:8766** in a browser. Useful links:
 URL parameters: `run`, `new`, `wb` (geometry, mesh, materials, boundaries, equations, study,
 results), `view` (field, profiles, checks, mesh, figures, log), `ptab` (view, data), `theme`.
 
-The old HUD (`hud/server.py`, port 8765) is untouched and keeps working.
+The old HUD dashboard was removed on 2026-11-23; its JSON API now lives in `app/api.py`.
 
 ## What works
 
@@ -75,7 +75,9 @@ The old HUD (`hud/server.py`, port 8765) is untouched and keeps working.
 ## Files
 
 ```
-app/server.py                  dev server: imports hud/server.py, subclasses its handler,
+app/api.py                     JSON API over run folders (runs, files, logs, launch, stop,
+                               devices, template list); formerly hud/server.py
+app/server.py                  dev server: imports app/api.py, subclasses its handler,
                                serves ui/ and adds figures/*.png, svg/*.svg (strict CSP),
                                mesh/view_a.png, mesh/view_b.png, mesh/diagnose.json
 app/ui/index.html              shell markup
@@ -94,7 +96,7 @@ app/ui/js/plots.js             Plotly theme from the tokens, cosmic line colours
 app/ui/js/icons.js             hand-written SVG icon set (one stroke style)
 app/ui/js/util.js              DOM and number helpers
 app/ui/data/colormaps.json     cmasher tables (written by the post-processing step)
-app/ui/vendor/plotly.min.js    copy of hud/static/vendor/plotly.min.js
+app/ui/vendor/plotly.min.js    Plotly (vendored)
 app/src-tauri/                 Tauri 2 shell (UNBUILT, see below)
 ```
 

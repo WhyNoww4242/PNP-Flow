@@ -58,7 +58,7 @@ as the GUI.
 
 ## Brand Commitments
 - Name: pnpflow.
-- Keep the current HUD's colours and type, its left menu, overall layout and mesh view.
+- Keep the former HUD's colours and type, its left menu, overall layout and mesh view (now in the app).
 - Standard desktop menu bar on top (File, Edit, View, …).
 - Scientific figures use cmasher colormaps and the `apply_custom_style` house style
   (LaTeX, Times, 24 pt, no top/right spines). See `AGENTS.md` §9.
@@ -66,7 +66,7 @@ as the GUI.
 ## Evidence on Hand
 - Validation results in `results/val_*` (Gouy–Chapman, EO slit, manufactured solution) and
   `results/cyl_quick`.
-- The current HUD (`hud/`) as the visual reference.
+- The app itself (`app/ui`), which carries over the former HUD's look (the HUD was removed 2026-11-23).
 - No user testimonials or external case studies exist; do not invent any.
 
 ## Product Principles

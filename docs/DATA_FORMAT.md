@@ -1,9 +1,9 @@
-# pnpflow result format (contract between solver and HUD)
+# pnpflow result format (contract between solver and app)
 
 Every run writes one folder: `results/<run_name>/` (runs from the command line with a
 template), or `cases/<case>/results/<run_name>/` (runs of a case, see **Cases** below). Run
 names are unique across both, so `/api/run/<name>` finds either.
-All JSON is plain UTF-8. Numbers are floats. Missing items may be absent — the HUD must tolerate that.
+All JSON is plain UTF-8. Numbers are floats. Missing items may be absent — the app must tolerate that.
 
 ## progress.json  (rewritten during the run)
 ```json
@@ -144,7 +144,7 @@ list-valued `integrals` blocks: `timeseries_<name>.csv`; everything in long form
 `profiles_long.csv` (`line, tau, coord_name, coord, quantity, value`). NaN = empty cell.
 
 ## plots/*.png
-Static matplotlib images (mesh, mesh zoom, field maps, profiles). The HUD can show them as a gallery.
+Static matplotlib images (mesh, mesh zoom, field maps, profiles). The app shows them in its figure gallery.
 
 ## mesh/  (every run, written right after meshing)
 - `view_a.png`: whole domain, boundaries coloured by physical group (unnamed edges as red dots).
@@ -158,7 +158,7 @@ Static matplotlib images (mesh, mesh zoom, field maps, profiles). The HUD can sh
 are mirrored about r = 0. Skipped with `--no-plots`.
 
 ## solution.msh / solution.vtu
-For gmsh / ParaView. Not read by the HUD.
+For gmsh / ParaView. Not read by the app.
 
 ## Launching runs
 `python run.py <case> --name <run_name> --set key=value --set key2=value2`

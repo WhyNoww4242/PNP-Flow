@@ -102,6 +102,13 @@ app.suggestName = (doc) => {
   return `${doc.kind === "case" ? doc.caseName : doc.case || "run"}_${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
 };
 
+/** The name typed for the next solve: kept in case.json for a case (survives reloads), in memory otherwise. */
+app.nextNameOf = (doc) => (doc.kind === "case" && doc.caseData ? doc.caseData.next_run_name : doc.nextName) || null;
+app.setNextName = (doc, name) => {
+  if (doc.kind === "case" && doc.caseData) { doc.caseData.next_run_name = name || null; app.caseChanged(doc); }
+  else doc.nextName = name || null;
+};
+
 /** Values that differ from the template defaults (what gets passed as --set). */
 function changedParams(doc) {
   const out = {};
@@ -271,7 +278,7 @@ const CMD = {
   savePNG: { label: "Save the field view as PNG", icon: "image-down", key: "P", enabled: needField, run: () => app.field.savePNG(app.activeDoc().name) },
   copyCmd: { label: "Copy the run command", icon: "script", enabled: docOpen, run: async () => {
     const d = app.activeDoc();
-    const text = app.commandLine(d, d.nextName || app.suggestName(d));
+    const text = app.commandLine(d, app.nextNameOf(d) || app.suggestName(d));
     try { await navigator.clipboard.writeText(text); app.toast("Run command copied", "ok"); } catch { app.toast(text, "info"); }
   } },
   resetParams: { label: "Reset parameters to the template values", icon: "reset",
@@ -839,7 +846,7 @@ const DEFAULT_TIME = { save: { mode: "template", dtau: 0.05, n: 20, tau_min: 1e-
 
 /** Fill missing blocks of a case.json (same defaults as pnpflow/project.py). */
 function normalizeCase(c) {
-  c = Object.assign({ params: {}, units: {}, figures: { standard: true } }, c || {});
+  c = Object.assign({ params: {}, units: {}, figures: { standard: true }, next_run_name: null }, c || {});
   c.mesh = Object.assign(structuredClone(DEFAULT_MESH), c.mesh || {});
   c.mesh.corners = Object.assign(structuredClone(DEFAULT_MESH.corners), (c.mesh && c.mesh.corners) || {});
   c.time = Object.assign(structuredClone(DEFAULT_TIME), c.time || {});
@@ -1240,7 +1247,7 @@ app.solve = async (d, { name, overwrite, msgEl } = {}) => {
   if (d.kind === "run") { await app.caseOfRun(d); return; }
   if (!d.case || !S.cases[d.case]) return say("error", d.case ? `Template '${d.case}' is not available from run.py.` : "This document has no template (case) yet. Wait for the run to load or open a template from the Start page.");
   if (d.invalid && Object.keys(d.invalid).length) return say("error", `Fix the highlighted parameters first: ${Object.keys(d.invalid).join(", ")}.`);
-  name = (name || d.nextName || app.suggestName(d)).trim();
+  name = (name || app.nextNameOf(d) || app.suggestName(d)).trim();
   if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(name)) return say("error", "Run names use letters, digits, '_', '.' and '-' only, and start with a letter, digit or '_'.");
   say("info", `Starting ${name}…`);
   try {
@@ -1255,7 +1262,7 @@ app.solve = async (d, { name, overwrite, msgEl } = {}) => {
     return say("error", exists ? `A run called '${name}' already exists. Choose another name or tick "Replace an existing run".` : `Could not start the run: ${e.message}`);
   }
   if (d.kind === "case") {
-    d.nextName = null;
+    app.setNextName(d, null);
     await refreshRuns();
     await app.showCaseRun(d, name, { render: false });
     d.wb = "study";

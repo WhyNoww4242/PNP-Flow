@@ -299,18 +299,27 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
   const canvas = h("canvas.mt-canvas", { tabindex: "0", "aria-label": "Mesh with refinements. Tools: pan, box, disk, paint, erase." });
   const hint = h("div.mt-hint");
   const canvasBox = h("div.mt-canvas-box", {}, canvas, hint);
-  const view = doc.meshView || (doc.meshView = { cx: 0, cy: 0, k: 0 });
+  // Independent x/y scale (pixels per unit): a slender domain (a pore, a thin slit)
+  // is stretched on one axis to fill the canvas instead of shrinking to a sliver,
+  // the same choice pnpflow/meshtools.py makes for view_a.png (_figsize/MIN_FILL).
+  const view = doc.meshView || (doc.meshView = { cx: 0, cy: 0, kx: 0, ky: 0 });
   let geom = null;
   const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const toScreen = (x, y) => [(x - view.cx) * view.k + canvas.width / 2, canvas.height / 2 - (y - view.cy) * view.k];
-  const toWorld = (sx, sy) => [(sx - canvas.width / 2) / view.k + view.cx, view.cy - (sy - canvas.height / 2) / view.k];
-  const fit = () => {
+  const toScreen = (x, y) => [(x - view.cx) * view.kx + canvas.width / 2, canvas.height / 2 - (y - view.cy) * view.ky];
+  const toWorld = (sx, sy) => [(sx - canvas.width / 2) / view.kx + view.cx, view.cy - (sy - canvas.height / 2) / view.ky];
+  const MIN_FILL = 0.35; // keep the true aspect only if the short side fills this much of the box
+  const autoScale = () => {
     const bb = geom.bbox;
-    const W = canvas.width, H = canvas.height;
+    const W = canvas.width, H = canvas.height, margin = 0.92;
+    const boxW = W * margin, boxH = H * margin;
+    const wData = Math.max(bb[1] - bb[0], 1e-12), hData = Math.max(bb[3] - bb[2], 1e-12);
+    const s = Math.min(boxW / wData, boxH / hData);
+    const w = wData * s, h = hData * s;
     view.cx = (bb[0] + bb[1]) / 2; view.cy = (bb[2] + bb[3]) / 2;
-    view.k = 0.92 * Math.min(W / Math.max(1e-12, bb[1] - bb[0]), H / Math.max(1e-12, bb[3] - bb[2]));
+    if (Math.min(w / boxW, h / boxH) < MIN_FILL) { view.kx = boxW / wData; view.ky = boxH / hData; }
+    else view.kx = view.ky = s;
   };
-  const brushR = () => doc.paintUI.r || 0.03 * Math.min(canvas.width, canvas.height) / view.k;
+  const brushR = () => doc.paintUI.r || 0.03 * Math.min(canvas.width, canvas.height) / Math.sqrt(view.kx * view.ky);
   let pending = false;
   function draw() {
     if (pending) return;
@@ -326,18 +335,19 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     if (canvas.width !== Math.round(rect.width * dpr) || canvas.height !== Math.round(rect.height * dpr)) {
       const oldW = canvas.width;
       canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr);
-      if (view.k && oldW) view.k *= canvas.width / oldW;
+      if (view.kx && oldW) { view.kx *= canvas.width / oldW; view.ky *= canvas.width / oldW; }
     }
     const g = canvas.getContext("2d");
     g.fillStyle = css("--plot-bg"); g.fillRect(0, 0, canvas.width, canvas.height);
     if (!geom) return;
-    if (!view.k) fit();
+    if (!view.kx) autoScale();
+    drawScaleBar();
     // mesh edges. Large meshes (10^5–10^6 triangles): skip triangles off screen, and
     // draw triangles under ~2 px as one shaded pixel instead of three lines, so a frame
     // stays a single cheap pass however fine the mesh is.
     const P = geom.nodes;
     const W = canvas.width, H = canvas.height;
-    const k = view.k, ox = W / 2 - view.cx * k, oy = H / 2 + view.cy * k;
+    const kx = view.kx, ky = view.ky, ox = W / 2 - view.cx * kx, oy = H / 2 + view.cy * ky;
     const tiny = 2 * dpr;
     g.lineWidth = 1;
     g.strokeStyle = css("--border-strong");
@@ -347,9 +357,9 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     for (let i = 0; i < T.length; i++) {
       const t = T[i];
       const a = P[t[0]], b = P[t[1]], c = P[t[2]];
-      const ax = a[0] * k + ox, ay = oy - a[1] * k;
-      const bx = b[0] * k + ox, by = oy - b[1] * k;
-      const cx = c[0] * k + ox, cy = oy - c[1] * k;
+      const ax = a[0] * kx + ox, ay = oy - a[1] * ky;
+      const bx = b[0] * kx + ox, by = oy - b[1] * ky;
+      const cx = c[0] * kx + ox, cy = oy - c[1] * ky;
       const x0 = Math.min(ax, bx, cx), x1 = Math.max(ax, bx, cx);
       const y0 = Math.min(ay, by, cy), y1 = Math.max(ay, by, cy);
       if (x1 < 0 || y1 < 0 || x0 > W || y0 > H) continue;
@@ -380,13 +390,13 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
         g.rect(x0, y0, x1 - x0, y1 - y0);
       } else {
         const [x, y] = toScreen(r.x, r.y);
-        g.arc(x, y, Math.max(2, (r.r || 0) * view.k), 0, 2 * Math.PI);
+        g.ellipse(x, y, Math.max(2, (r.r || 0) * view.kx), Math.max(2, (r.r || 0) * view.ky), 0, 0, 2 * Math.PI);
       }
       g.fill(); g.stroke();
     }
     for (const s of mesh.paint) {
       const [x, y] = toScreen(s.x, s.y);
-      g.beginPath(); g.arc(x, y, Math.max(1.5, s.r * view.k), 0, 2 * Math.PI); g.fill();
+      g.beginPath(); g.ellipse(x, y, Math.max(1.5, s.r * view.kx), Math.max(1.5, s.r * view.ky), 0, 0, 2 * Math.PI); g.fill();
     }
     // corners found at the last build
     g.fillStyle = css("--warn");
@@ -403,7 +413,8 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     const tool = doc.meshTool || "pan";
     if (hover && (tool === "paint" || tool === "erase")) {
       g.strokeStyle = tool === "erase" ? css("--bad") : acc;
-      g.beginPath(); g.arc(hover[0], hover[1], brushR() * view.k, 0, 2 * Math.PI); g.stroke();
+      const r = brushR();
+      g.beginPath(); g.ellipse(hover[0], hover[1], r * view.kx, r * view.ky, 0, 0, 2 * Math.PI); g.stroke();
     }
   }
   const HINTS = {
@@ -450,7 +461,7 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     hover = [sx, sy];
     if (drag) {
       drag.x1 = sx; drag.y1 = sy;
-      if (drag.tool === "pan") { view.cx = drag.cx - (sx - drag.x0) / view.k; view.cy = drag.cy + (sy - drag.y0) / view.k; }
+      if (drag.tool === "pan") { view.cx = drag.cx - (sx - drag.x0) / view.kx; view.cy = drag.cy + (sy - drag.y0) / view.ky; }
       if (drag.tool === "paint") sprayAt(sx, sy);
       if (drag.tool === "erase") eraseAt(sx, sy);
     }
@@ -472,22 +483,44 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     } else if (d.tool === "paint" || d.tool === "erase") save();
     draw();
   });
-  canvas.addEventListener("dblclick", () => { if (geom) { fit(); draw(); } });
+  canvas.addEventListener("dblclick", () => { if (geom) { autoScale(); draw(); } });
   canvas.addEventListener("wheel", (e) => {
     if (!geom) return;
     e.preventDefault();
     const [sx, sy] = pos(e);
     const [wx, wy] = toWorld(sx, sy);
-    view.k *= Math.exp(-e.deltaY * 0.0015);
+    const f = Math.exp(-e.deltaY * 0.0015);
+    view.kx *= f; view.ky *= f; // zoom keeps whatever x/y stretch is set, auto or manual
     const [nx, ny] = toWorld(sx, sy);
     view.cx += wx - nx; view.cy += wy - ny;
     draw();
   }, { passive: false });
   new ResizeObserver(() => draw()).observe(canvas);
 
+  // ---- scale bar: Auto scale (View A's equal-unless-slender rule) + the x/y
+  // scale it picked (pixels per unit), editable for manual control ----
+  const scaleXIn = h("input.inp.mt-scale-inp", { type: "text", inputmode: "decimal", "aria-label": "Horizontal scale, pixels per unit",
+    onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v > 0) { view.kx = v; draw(); } else drawScaleBar(); } });
+  const scaleYIn = h("input.inp.mt-scale-inp", { type: "text", inputmode: "decimal", "aria-label": "Vertical scale, pixels per unit",
+    onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v > 0) { view.ky = v; draw(); } else drawScaleBar(); } });
+  const stretchNote = h("span.small.dim.mt-stretch-note");
+  const scaleBar = h("div.mt-scalebar", {},
+    h("button.btn.sm", { type: "button", "data-tip": "Equal x/y scale, unless the domain is too slender to fit (View A's own rule)", onclick: () => { autoScale(); draw(); } },
+      icon("fit", 14), "Auto scale"),
+    h("label.mt-scale-field", {}, "X", scaleXIn), h("label.mt-scale-field", {}, "Y", scaleYIn),
+    stretchNote);
+  function drawScaleBar() {
+    if (!geom) return;
+    if (document.activeElement !== scaleXIn) scaleXIn.value = fmt(view.kx, 4);
+    if (document.activeElement !== scaleYIn) scaleYIn.value = fmt(view.ky, 4);
+    const ratio = view.kx > view.ky ? view.kx / view.ky : view.ky / view.kx;
+    stretchNote.textContent = ratio > 1.03 ? `axes not to scale (${view.ky > view.kx ? "vertical" : "horizontal"} stretched ÷${fmt(ratio, 3)})` : "";
+  }
+
   const canvasPanel = h("section.panel.mt-canvas-panel", {},
     h("header.panel-head", {}, h("h2", { text: "Mesh and refinements" }), h("span.spacer"),
       h("span.small.dim", { text: "Toolbar: Pan · Box · Disk · Paint · Erase" })),
+    scaleBar,
     canvasBox);
   if (doc.caseMesh) { geom = doc.caseMesh; draw(); }
   else if ((det.mesh_files || []).includes("mesh/mesh.json")) {

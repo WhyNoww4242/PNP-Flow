@@ -231,8 +231,8 @@ export function renderEquations(app, doc, root) {
 // ---------------------------------------------------------------------------
 export function renderStudy(app, doc, root) {
   const rows = app.paramRows(doc);
-  const nameIn = h("input.inp#run-name", { type: "text", spellcheck: "false", value: doc.nextName || app.suggestName(doc), "aria-label": "Run name",
-    oninput: (e) => { doc.nextName = e.target.value; updateCmd(); } });
+  const nameIn = h("input.inp#run-name", { type: "text", spellcheck: "false", value: app.nextNameOf(doc) || app.suggestName(doc), "aria-label": "Run name",
+    oninput: (e) => { app.setNextName(doc, e.target.value); updateCmd(); } });
   const overwrite = h("input", { type: "checkbox", checked: !!doc.overwrite, onchange: (e) => { doc.overwrite = e.target.checked; } });
   const cmd = h("code.cmd");
   const msg = h("div", { "aria-live": "polite" });
@@ -313,8 +313,14 @@ function studySettings(app, doc) {
       doc.kind === "run" ? resultFoot(app, doc) : null);
   }
   const readonly = doc.kind !== "case";
-  // time settings: the case's (editable) or the result's frozen case.json (read-only)
+  // time settings: the case's (editable) or the result's frozen case.json (read-only).
+  // A save can replace doc.caseData with a fresh object from the server (saveCaseNow),
+  // so every write goes through curTime()/curSave() to fetch it at that moment rather
+  // than closing over doc.caseData.time once: writing into a stale copy would otherwise
+  // be silently lost (the next save posts the real, unchanged doc.caseData).
   const tm = doc.kind === "case" ? doc.caseData.time : app.normalizeCase(doc.runCase || {}).time;
+  const curTime = () => (doc.kind === "case" && doc.caseData ? doc.caseData.time : tm);
+  const curSave = () => curTime().save;
   const save = () => { if (!readonly) app.caseChanged(doc); };
   const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
 
@@ -340,54 +346,56 @@ function studySettings(app, doc) {
         const v = Number(t);
         const ok = (t === "" && blank) || (Number.isFinite(v) && v > min && (!integer || Number.isInteger(v)));
         e.target.classList.toggle("invalid", !ok);
-        if (ok) { tm[key] = t === "" ? null : v; save(); }
+        if (ok) { curTime()[key] = t === "" ? null : v; save(); }
       } });
     return h("label.ts-cell", { "data-tip-title": label, "data-tip": tip }, h("span.ts-lbl", { text: label }), inp);
   };
 
   // saved times: mode picker
-  const sv = tm.save;
+  const sv = curSave();
   const modes = [["template", "Template", "The template's own output list (pore: log-spaced set, or the DNS folder times with dns_times = 1)"],
-    ["uniform", "Every Δτ", "Save every Δτ from 0 to τ_end"], ["log", "Log-spaced", "N points evenly spaced in log τ between τ_min and τ_end"], ["list", "List", "Exactly these τ values"]];
+    ["uniform", "Every Δτ", "Save every Δτ from 0 to τ_end (a save time step you choose)"], ["log", "Log-spaced", "N points evenly spaced in log τ between τ_min and τ_end"], ["list", "List", "Exactly these τ values"]];
   const modeSeg = h("span.seg.ts-seg", { role: "radiogroup", "aria-label": "Saved times" }, modes.map(([m, t, tip]) => h("button", {
     type: "button", role: "radio", "aria-checked": String(sv.mode === m), "aria-pressed": String(sv.mode === m), disabled: readonly || null, "data-tip": tip,
-    onclick: () => { sv.mode = m; save(); drawSave(); modeSeg.querySelectorAll("button").forEach((b, i) => { const on = modes[i][0] === m; b.setAttribute("aria-pressed", String(on)); b.setAttribute("aria-checked", String(on)); }); } }, t)));
+    onclick: () => { curSave().mode = m; save(); drawSave(); modeSeg.querySelectorAll("button").forEach((b, i) => { const on = modes[i][0] === m; b.setAttribute("aria-pressed", String(on)); b.setAttribute("aria-checked", String(on)); }); } }, t)));
   const saveBody = h("div.ts-row");
   const preview = h("span.small.dim.ts-preview");
   const tauEnd = () => (byKey.tau_end ? Number(byKey.tau_end.value) : null);
   const saveTimes = () => {
     const te = tauEnd();
+    const cs = curSave();
     if (!te) return null;
-    if (sv.mode === "uniform") return sv.dtau > 0 ? Math.floor(te / sv.dtau + 1e-9) + (Math.abs(Math.round(te / sv.dtau) * sv.dtau - te) > 1e-9 * te ? 1 : 0) : null;
-    if (sv.mode === "log") return sv.n || null;
-    if (sv.mode === "list") return new Set([...(sv.list || []).filter((t) => t > 0 && t <= te), te]).size;
+    if (cs.mode === "uniform") return cs.dtau > 0 ? Math.floor(te / cs.dtau + 1e-9) + (Math.abs(Math.round(te / cs.dtau) * cs.dtau - te) > 1e-9 * te ? 1 : 0) : null;
+    if (cs.mode === "log") return cs.n || null;
+    if (cs.mode === "list") return new Set([...(cs.list || []).filter((t) => t > 0 && t <= te), te]).size;
     return null;
   };
   const drawPreview = () => {
     const n = saveTimes();
-    preview.textContent = sv.mode === "template" ? "the template decides (τ = 0.13 and τ_mid are always saved)" : n ? `${n} saved time${n === 1 ? "" : "s"} plus τ = 0.13 and τ_mid when inside the run; τ_end is always saved` : "";
+    preview.textContent = curSave().mode === "template" ? "the template decides (τ = 0.13 and τ_mid are always saved)" : n ? `${n} saved time${n === 1 ? "" : "s"} plus τ = 0.13 and τ_mid when inside the run; τ_end is always saved` : "";
   };
   const svCell = (label, key, tip, opts = {}) => {
-    const inp = h("input.inp", { type: "text", inputmode: "decimal", readonly: readonly || null, value: String(sv[key] ?? ""),
+    const inp = h("input.inp", { type: "text", inputmode: "decimal", readonly: readonly || null, value: String(curSave()[key] ?? ""),
       onchange: (e) => {
         const v = Number(e.target.value);
         const ok = Number.isFinite(v) && v > 0 && (!opts.integer || Number.isInteger(v));
         e.target.classList.toggle("invalid", !ok);
-        if (ok) { sv[key] = v; save(); drawPreview(); }
+        if (ok) { curSave()[key] = v; save(); drawPreview(); }
       } });
     return h("label.ts-cell", { "data-tip": tip }, h("span.ts-lbl", { text: label }), inp);
   };
   function drawSave() {
+    const cs = curSave();
     let cells = [];
-    if (sv.mode === "uniform") cells = [svCell("Δτ", "dtau", "Spacing of the saved times")];
-    else if (sv.mode === "log") cells = [svCell("N points", "n", "Number of saved times", { integer: true }), svCell("from τ_min", "tau_min", "First saved time")];
-    else if (sv.mode === "list") {
-      const inp = h("input.inp.ts-list", { type: "text", readonly: readonly || null, value: (sv.list || []).join(", "), placeholder: "0.01, 0.13, 0.5, 1",
+    if (cs.mode === "uniform") cells = [svCell("Δτ", "dtau", "Spacing of the saved times: the time step between saves, set by you")];
+    else if (cs.mode === "log") cells = [svCell("N points", "n", "Number of saved times", { integer: true }), svCell("from τ_min", "tau_min", "First saved time")];
+    else if (cs.mode === "list") {
+      const inp = h("input.inp.ts-list", { type: "text", readonly: readonly || null, value: (cs.list || []).join(", "), placeholder: "0.01, 0.13, 0.5, 1",
         onchange: (e) => {
           const parts = e.target.value.split(/[,\s;]+/).filter(Boolean).map(Number);
           const ok = parts.every((v) => Number.isFinite(v) && v > 0);
           e.target.classList.toggle("invalid", !ok);
-          if (ok) { sv.list = parts.sort((a, b) => a - b); save(); drawPreview(); }
+          if (ok) { curSave().list = parts.sort((a, b) => a - b); save(); drawPreview(); }
         } });
       cells = [h("label.ts-cell.wide", { "data-tip": "Comma-separated τ values" }, h("span.ts-lbl", { text: "τ values" }), inp)];
     }
