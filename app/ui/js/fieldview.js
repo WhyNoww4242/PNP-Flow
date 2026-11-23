@@ -34,7 +34,7 @@ export class FieldView {
       contours: 0, vectors: "none", arrowMode: "log", stream: false, mirror: true,
     }, store.get("fieldview", {}));
     this.range = { mode: "auto", lo: 0, hi: 1 }; // mode: auto | view | manual
-    this.view = { cx: 0, cy: 0, ppu: 1 };
+    this.view = { cx: 0, cy: 0, ppu: 1, ky: 1 }; // ppu: device px per unit along x; ky: y scale relative to x (1 = true aspect)
     this.size = { w: 1, h: 1, dpr: 1 };
     this.streamCache = null;
     this.contourCache = null;
@@ -65,9 +65,31 @@ export class FieldView {
     e.cbarMin = h("div.cbar-end.mono");
     e.cbar = h("div.colorbar", {}, e.cbarTitle, e.cbarMax, h("div.cbar-body", {}, e.cbarGrad, e.cbarTicks), e.cbarMin);
     e.main = h("div.fv-main", {}, e.stage, e.cbar);
+    e.field = h("select.sel.fv-field", { "aria-label": "Field shown", "data-tip": "Field shown on the map", onchange: (ev) => this.selectField(ev.target.value) });
+    const btn = (ic, label, run, extra = {}) => h("button.tool", Object.assign({ type: "button", "aria-label": label, "data-tip-title": label, onclick: run }, extra), icon(ic, 18));
+    e.bar = h("div.fv-bar", {}, e.field, h("span.tool-sep", { "aria-hidden": "true" }),
+      btn("home", "Home: zoom to the focus region", () => this.home(), { "data-tip-key": "G" }),
+      btn("zoom-in", "Zoom in", () => this.zoomBy(1.4)),
+      btn("zoom-out", "Zoom out", () => this.zoomBy(1 / 1.4)),
+      h("span.fv-axgrp", { role: "group", "aria-label": "Scale the x axis" }, h("span.fv-axl", { text: "x" }),
+        btn("zoom-out", "Shrink the x axis (Shift + wheel)", () => this.zoomAxis("x", 1 / 1.4)),
+        btn("zoom-in", "Stretch the x axis (Shift + wheel)", () => this.zoomAxis("x", 1.4))),
+      h("span.fv-axgrp", { role: "group", "aria-label": "Scale the y axis" }, h("span.fv-axl", { text: "y" }),
+        btn("zoom-out", "Shrink the y axis (Alt + wheel)", () => this.zoomAxis("y", 1 / 1.4)),
+        btn("zoom-in", "Stretch the y axis (Alt + wheel)", () => this.zoomAxis("y", 1.4))),
+      btn("fit", "Fit the whole mesh to the window (true aspect ratio)", () => this.fitTrue(), { "data-tip-key": "F" }),
+      btn("rescale", "Rescale: fill the window, each axis with its own scale", () => this.rescale()));
+    e.tPlay = h("button.tool", { type: "button", "aria-label": "Play the time steps", "data-tip-title": "Play / pause", onclick: () => this.togglePlay() }, icon("play", 16));
+    e.tRange = h("input.fv-trange", { type: "range", min: "0", max: "0", step: "1", value: "0", "aria-label": "Time step",
+      oninput: (ev) => { this.stopPlay(); this.setTimeIndex(+ev.target.value); } });
+    e.tRead = h("div.fv-tread.mono");
+    e.time = h("div.fv-time.hidden", {}, e.tPlay, e.tRange, e.tRead);
+    e.scaleNote = h("span.fv-scale-note.hidden");
+    e.bar.appendChild(h("span.spacer"));
+    e.bar.appendChild(e.scaleNote);
     e.footer = h("div.fv-footer", {}, e.readout,
       h("div.fv-hint", { text: "Wheel: zoom · drag: pan · click: probe · double-click: focus" }));
-    setChildren(this.root, h("div.fieldview", {}, e.main, e.footer));
+    setChildren(this.root, h("div.fieldview", {}, e.bar, e.main, e.time, e.footer));
     this.attachInteraction();
     new ResizeObserver(() => this.resize()).observe(e.stage);
   }
@@ -85,6 +107,7 @@ export class FieldView {
   // Data
   // -------------------------------------------------------------------------
   setMesh(mesh) {
+    this.setTimeSeries(null);      // restores the previous mesh's final fields before it is replaced
     this.mesh = mesh;
     this.index = null;
     this.stats = {};
@@ -113,6 +136,7 @@ export class FieldView {
     this.resize(true);
     this.zoomFocus();
     const names = Object.keys(mesh.fields);
+    setChildren(this.el.field, names.map((n) => h("option", { value: n, text: `${prettyName(n)}${mesh.labels && mesh.labels[n] ? ` · ${mesh.labels[n]}` : ""}` })));
     const want = names.includes(this.opts.field) ? this.opts.field : this.defaultField(names);
     if (want) this.selectField(want);
     else this.showMessage("empty", "No nodal fields", "fields.json has a mesh but no field with one value per node.");
@@ -139,7 +163,15 @@ export class FieldView {
   }
 
   statsOf(name) {
-    if (!this.stats[name]) this.stats[name] = fieldStats(this.mesh.fields[name]);
+    if (!this.stats[name]) {
+      const frames = this.ts && this.ts.fields[name];   // time-resolved: statistics over all times
+      if (frames) {
+        const all = frames.map(fieldStats);
+        const pos = all.map((a) => a.minPos).filter((v) => v !== null);
+        this.stats[name] = { min: Math.min(...all.map((a) => a.min)), max: Math.max(...all.map((a) => a.max)),
+          minPos: pos.length ? Math.min(...pos) : null, nan: all[0].nan };
+      } else this.stats[name] = fieldStats(this.mesh.fields[name]);
+    }
     return this.stats[name];
   }
 
@@ -153,9 +185,79 @@ export class FieldView {
     return st.min < -frac * m && st.max > frac * m;
   }
 
+  // -------------------------------------------------------------------------
+  // Time slider (fields_time.json)
+  // -------------------------------------------------------------------------
+  /** ts = {t, tau, fields:{name: Float32Array[]}} on the prepared mesh, or null. */
+  setTimeSeries(ts) {
+    this.stopPlay();
+    if (this.finalFields && this.mesh) for (const [k, v] of Object.entries(this.finalFields)) this.mesh.fields[k] = v;
+    this.finalFields = null;
+    this.ts = null;
+    this.stats = {};
+    this.el.time.classList.add("hidden");
+    if (!ts || !this.mesh) return;
+    const names = Object.keys(ts.fields).filter((k) => this.mesh.fields[k]);
+    if (!names.length || ts.t.length < 2) return;
+    this.finalFields = Object.fromEntries(names.map((k) => [k, this.mesh.fields[k]]));
+    this.ts = { t: ts.t, tau: ts.tau, fields: Object.fromEntries(names.map((k) => [k, ts.fields[k]])) };
+    this.tIdx = ts.t.length - 1;
+    this.el.tRange.max = String(this.tIdx);
+    this.el.tRange.value = String(this.tIdx);
+    this.el.time.classList.remove("hidden");
+    this.setTimeIndex(this.tIdx);
+    if (this.opts.field) this.selectField(this.opts.field);
+  }
+
+  setTimeIndex(i) {
+    if (!this.ts) return;
+    i = Math.max(0, Math.min(this.ts.t.length - 1, Math.round(i)));
+    this.tIdx = i;
+    for (const [k, frames] of Object.entries(this.ts.fields)) this.mesh.fields[k] = frames[i];
+    this.el.tRange.value = String(i);
+    const f = this.opts.field;
+    if (f && this.ts.fields[f] && this.gl) {
+      this.gl.setValues(this.mesh.fields[f]);
+      this.contourCache = null;
+      this.streamCache = null;
+      if (this.range.mode === "view") this.autoRange(); else this.redraw();
+      this.updateProbe();
+    }
+    this.updateTimeReadout();
+  }
+
+  updateTimeReadout() {
+    if (!this.ts) return;
+    const i = this.tIdx, n = this.ts.t.length;
+    const tau = this.ts.tau ? `\u03c4 = ${fmt(this.ts.tau[i], 3)}   ` : "";
+    const f = this.opts.field;
+    const stale = f && !this.ts.fields[f] && i !== n - 1;
+    this.el.tRead.textContent = `${tau}t = ${fmt(this.ts.t[i], 4)}   step ${i + 1} of ${n}${stale ? `   (${prettyName(f)} is only available at the final time)` : ""}`;
+    this.el.tRead.classList.toggle("warn", !!stale);
+  }
+
+  togglePlay() {
+    if (this.playTimer) return this.stopPlay();
+    if (!this.ts) return;
+    if (this.tIdx >= this.ts.t.length - 1) this.setTimeIndex(0);
+    setChildren(this.el.tPlay, icon("stop", 16));
+    this.el.tPlay.setAttribute("aria-label", "Pause");
+    this.playTimer = setInterval(() => {
+      if (this.tIdx >= this.ts.t.length - 1) return this.stopPlay();
+      this.setTimeIndex(this.tIdx + 1);
+    }, 500);
+  }
+
+  stopPlay() {
+    if (this.playTimer) { clearInterval(this.playTimer); this.playTimer = null; }
+    setChildren(this.el.tPlay, icon("play", 16));
+    this.el.tPlay.setAttribute("aria-label", "Play the time steps");
+  }
+
   selectField(name) {
     if (!this.mesh || !this.mesh.fields[name] || !this.gl) return;
     this.opts.field = name;
+    this.el.field.value = name;
     this.signed = this.isSigned(name);
     let cmap = this.opts.cmap[name];
     if (!cmap || !colormapNames().includes(cmap)) cmap = defaultColormap(this.signed, name);
@@ -167,6 +269,7 @@ export class FieldView {
     this.autoRange();
     this.persist();
     this.updateProbe();
+    this.updateTimeReadout();
     this.onChange();
   }
 
@@ -218,11 +321,13 @@ export class FieldView {
   /** Colour range from all nodes or from the nodes in view. */
   autoRange() {
     if (!this.mesh || !this.opts.field) return;
-    const vals = this.mesh.fields[this.opts.field];
+    // a time-resolved field keeps one colour range over all times, so frames are comparable
+    const frames = this.ts && this.ts.fields[this.opts.field];
+    const arrs = frames && this.range.mode !== "view" ? frames : [this.mesh.fields[this.opts.field]];
     let lo = Infinity, hi = -Infinity, loPos = Infinity;
     const box = this.range.mode === "view" ? this.visibleBox() : null;
     const xy = this.mesh.xy;
-    for (let i = 0; i < vals.length; i++) {
+    for (const vals of arrs) for (let i = 0; i < vals.length; i++) {
       const v = vals[i];
       if (!(v === v)) continue;
       if (box) {
@@ -310,20 +415,59 @@ export class FieldView {
     this.redraw();
   }
 
-  fitBox(b, margin = 0.06) {
-    // fit into the area not covered by the axis bands (left 48px, bottom 20px)
+  /**
+   * Fit a box into the area not covered by the axis bands. stretch: "auto" keeps the
+   * true aspect unless the box is so slender that it would be unreadable (then each
+   * axis gets its own scale), true always uses independent scales, false never does.
+   */
+  fitBox(b, margin = 0.06, stretch = "auto") {
     const { w, h: hh, dpr } = this.size;
     const left = this.opts.axes ? 48 * dpr : 0, band = this.opts.axes ? 20 * dpr : 0;
     const bw = Math.max(b[1] - b[0], 1e-12), bh = Math.max(b[3] - b[2], 1e-12);
-    const ppu = Math.max(1e-9, Math.min((w - left) / bw, (hh - band) / bh) * (1 - 2 * margin));
-    this.view.ppu = ppu;
-    this.view.cx = (b[0] + b[1]) / 2 - left / (2 * ppu);
-    this.view.cy = (b[2] + b[3]) / 2 - band / (2 * ppu);
+    const k = 1 - 2 * margin;
+    const px = ((w - left) / bw) * k, py = ((hh - band) / bh) * k;
+    const iso = Math.min(px, py);
+    // how much of the stage the true-aspect box would leave empty
+    const fill = iso / Math.max(px, py);
+    const st = stretch === "auto" ? fill < 0.34 : !!stretch;
+    const ppx = Math.max(1e-9, st ? px : iso), ppy = Math.max(1e-9, st ? py : iso);
+    this.view.ppu = ppx;
+    this.view.ky = ppy / ppx;
+    this.view.cx = (b[0] + b[1]) / 2 - left / (2 * ppx);
+    this.view.cy = (b[2] + b[3]) / 2 - band / (2 * ppy);
     this.onViewChange();
   }
 
+  get stretched() {
+    return Math.abs(this.view.ky - 1) > 0.02;
+  }
+
+  /** Home: the focus region, readable even for slender domains. */
+  home() { if (this.mesh) this.fitBox(this.mesh.focus); }
+  /** Fit the whole mesh at its true aspect ratio. */
+  fitTrue() { if (this.mesh) this.fitBox(this.mesh.dataBox, 0.04, false); }
+  /** Rescale: fit the whole mesh with independent axis scales (tick labels show the real values). */
+  rescale() { if (this.mesh) this.fitBox(this.mesh.dataBox, 0.04, true); }
+
+  /** Scale x by fx and y by fy about a screen point (device px); default the stage centre. */
+  scaleAt(fx, fy, px = this.size.w / 2, py = this.size.h / 2) {
+    if (!this.mesh) return;
+    const [wx, wy] = this.toWorld(px, py);
+    const ppu = Math.min(Math.max(this.view.ppu * fx, 1e-6), 1e9);
+    this.view.ky = Math.min(Math.max(this.view.ky * fy / fx, 1e-4), 1e4);
+    this.view.ppu = ppu;
+    const [nx, ny] = this.toWorld(px, py);
+    this.view.cx += wx - nx;
+    this.view.cy += wy - ny;
+    this.onViewChange();
+  }
+
+  zoomBy(f) { this.scaleAt(f, f); }
+  /** Scale one axis only ("x" or "y"). */
+  zoomAxis(axis, f) { if (axis === "x") this.scaleAt(f, 1); else this.scaleAt(1, f); }
+
   zoomFocus() {
-    if (this.mesh) this.fitBox(this.mesh.focus);
+    this.home();
   }
 
   zoomAll() {
@@ -332,12 +476,12 @@ export class FieldView {
 
   toWorld(px, py) {
     const { w, h: hh } = this.size;
-    return [this.view.cx + (px - w / 2) / this.view.ppu, this.view.cy - (py - hh / 2) / this.view.ppu];
+    return [this.view.cx + (px - w / 2) / this.view.ppu, this.view.cy - (py - hh / 2) / (this.view.ppu * this.view.ky)];
   }
 
   toScreen(x, y) {
     const { w, h: hh } = this.size;
-    return [(x - this.view.cx) * this.view.ppu + w / 2, hh / 2 - (y - this.view.cy) * this.view.ppu];
+    return [(x - this.view.cx) * this.view.ppu + w / 2, hh / 2 - (y - this.view.cy) * this.view.ppu * this.view.ky];
   }
 
   visibleBox() {
@@ -363,14 +507,10 @@ export class FieldView {
       if (!this.mesh) return;
       ev.preventDefault();
       const [px, py] = devXY(ev);
-      const [wx, wy] = this.toWorld(px, py);
       const dy = ev.deltaMode === 1 ? ev.deltaY * 16 : ev.deltaY;
       const f = Math.exp(-Math.max(-300, Math.min(300, dy)) * 0.0022);
-      this.view.ppu = Math.min(Math.max(this.view.ppu * f, 1e-6), 1e9);
-      const [nx, ny] = this.toWorld(px, py);
-      this.view.cx += wx - nx;
-      this.view.cy += wy - ny;
-      this.onViewChange();
+      // shift: scale x only; alt: scale y only
+      this.scaleAt(ev.altKey ? 1 : f, ev.shiftKey ? 1 : f, px, py);
       this.updateHover(px, py);
     }, { passive: false });
     stage.addEventListener("pointerdown", (ev) => {
@@ -386,7 +526,7 @@ export class FieldView {
         const dx = px - drag.px, dy = py - drag.py;
         if (Math.abs(dx) + Math.abs(dy) > 3 * this.size.dpr) drag.moved = true;
         this.view.cx = drag.cx - dx / this.view.ppu;
-        this.view.cy = drag.cy + dy / this.view.ppu;
+        this.view.cy = drag.cy + dy / (this.view.ppu * this.view.ky);
         this.onViewChange();
       }
       this.updateHover(px, py);
@@ -501,6 +641,17 @@ export class FieldView {
     });
     this.drawOverlay();
     this.drawColorbar();
+    this.updateScaleNote();
+  }
+
+  updateScaleNote() {
+    const n = this.el.scaleNote, on = this.stretched && !!this.mesh;
+    n.classList.toggle("hidden", !on);
+    if (on) {
+      const [a, b] = this.mesh.coordNames;
+      const k = 1 / this.view.ky;
+      n.textContent = `Axes not to scale: ${b} is ${k >= 1 ? `compressed ${k.toFixed(k < 10 ? 1 : 0)}x` : `stretched ${(1 / k).toFixed(1 / k < 10 ? 1 : 0)}x`} relative to ${a}`;
+    }
   }
 
   drawOverlay() {

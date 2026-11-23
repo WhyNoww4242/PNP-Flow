@@ -605,3 +605,31 @@ table { border-collapse: collapse; width: 100%; }
   .solve-grid { grid-template-columns: 1fr; height: auto; }
   .tpl-list { grid-template-columns: 1fr; }
 }
+
+/* compute-device indicator: green = GPU in use, red = CPU */
+.dev-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--text-faint); transition: background var(--t-fast, 150ms) var(--ease); }
+.dev-dot.on { background: var(--ok); }
+.dev-dot.off { background: var(--bad); }
+/* overall progress of a time-dependent run */
+.time-progress { display: flex; flex-direction: column; gap: 6px; }
+.time-head { display: flex; align-items: baseline; font-size: 12.5px; color: var(--text-dim); }
+.time-head b { color: var(--text); font-weight: 600; }
+.time-head .spacer { flex: 1; }
+
+/* field map toolbar */
+.fv-bar { display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 10px; border-bottom: 1px solid var(--border); background: var(--surface); flex: none; }
+.fv-bar .fv-field { width: 210px; }
+.fv-bar .spacer { flex: 1; }
+.fv-bar .tool-sep { margin: 0 4px; }
+.fv-scale-note { font-size: 11.5px; color: var(--warn-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fv-scale-note.hidden { display: none; }
+
+.fv-axgrp { display: inline-flex; align-items: center; gap: 0; margin-left: 2px; }
+.fv-axgrp .tool { width: 26px; }
+.fv-axl { font: 12.5px var(--font-sans); color: var(--text-dim); padding: 0 2px 0 4px; }
+.fv-time { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border-top: 1px solid var(--border); background: var(--surface); flex: none; }
+.fv-time.hidden { display: none; }
+.fv-trange { flex: 1; min-width: 80px; accent-color: var(--accent); cursor: pointer; height: 20px; }
+.fv-trange:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fv-tread { font-size: 12px; color: var(--text); white-space: pre; }
+.fv-tread.warn { color: var(--warn-text); }

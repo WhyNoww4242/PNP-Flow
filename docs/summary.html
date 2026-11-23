@@ -373,15 +373,15 @@ mass      :  div u = 0                                          (optional)</pre>
 <section class="panel" id="run">
   <header><h2>How to run</h2></header>
   <div class="body">
-    <p>From a Windows terminal (the solver runs in WSL):</p>
-<pre>cd C:\Users\Gnome\Desktop\VMBox\pnpflow
-wsl -d Debian -- bash tools/wsl_run.sh python run.py charged_sphere --name sphere_demo
-wsl -d Debian -- bash tools/wsl_run.sh python run.py --list           # all cases and parameters
-wsl -d Debian -- bash tools/wsl_run.sh bash tools/validate.sh         # all validation cases</pre>
+    <p>From the repo root, inside the pnpflow conda env:</p>
+<pre>conda activate pnpflow
+python run.py charged_sphere --name sphere_demo
+python run.py --list           # all cases and parameters
+bash tools/validate.sh         # all validation cases</pre>
     <p>Results land in <code>results\sphere_demo\</code>: <code>figures\</code> (PNG) and <code>svg\</code>,
       <code>mesh\view_a.png</code>, <code>mesh\view_b.png</code>, <code>summary.json</code> with every check.</p>
     <p>To open the app (keep the terminal open while you use it):</p>
-<pre>wsl -d Debian -- bash tools/wsl_run.sh python app/server.py
+<pre>python app/server.py
 then open in a browser:
   http://localhost:8766/                                          Start page
   http://localhost:8766/?run=sphere_demo&amp;wb=results&amp;view=field    the charged sphere

@@ -27,6 +27,16 @@ Live-status keys (optional; `null` until the first Newton iteration):
 | `tells.min_c` | minimum concentration over all species nodes (`null` with no species) |
 | `tells.halvings` | continuation step halvings so far in the current target |
 
+Time-dependent runs (optional keys, only when the case sets `Setup.transient`):
+
+| key | meaning |
+|---|---|
+| `fraction` | simulated time `t / t_end` (not wall time; steps grow as the run goes) |
+| `health` | `converging` after an accepted step, `struggling` after a rejected one, `failed` |
+| `time` | `{t, t_end, tau, tau_end, dt, step, rejects}`: solver time, the case's time unit (`tau = t / t_per_tau`), last step, accepted steps, rejected steps |
+| `tells.dt`, `tells.newton_its`, `tells.err`, `tells.rejects` | last step size, its Newton iterations, its change-vs-extrapolation estimate, total rejections |
+| `history` | Newton iterations of every step (`stage` = step number) |
+
 ## summary.json
 ```json
 {
@@ -113,6 +123,24 @@ Fields of the `charged_sphere` case: `phi`, `Ey`(=E_r), `Ez`, `|E|`, `rho` (zero
     "values": {"phi": [...], "c+": [...], "sigma": [...], "shear": [...], "p": [...]}}]}
 ```
 
+Optional per line: `"time": {"tau": 0.13, "t_solver": 1300.0, "t_s": 9.7e-5}` (time-dependent
+runs write one line per output time, e.g. `axial_tau_0.13`, `radial_Z0.5_tau_0.13`).
+
+Time-dependent runs also add to `summary.json` (optional): `transient` =
+`{scheme, t_end, t_reached, t_per_tau, n_steps, steps: [{t, dt, newton_its, err, rejects,
+res_final}], output_times}`, `solver.equilibrium` = `{converged, newton_its}`,
+`integrals.charging` (pore case: `tau`, `mu_pore_avg`, `mu_Z05`, `Q_pore_per_rad`), and
+`fields_time.json` = `{t, tau, t_per_tau, n_nodes, fields: {c+, c-, rho, phi: [one array per output time]}}` (one value per P2 node like `fields.json`; drives the app's time slider; `tools/export_fields_time.py` writes it for older runs). `solution.npz` holds `t` and `U_t` (snapshot per output time). Every run records `device`
+= `{platform, devices}` (the JAX backend it ran on); `progress.json` carries the same `device` as soon as the run starts (the app shows a green/red dot from it).
+
+## csv/*.csv  (every run, from profiles.json + summary.json)
+Written at the end of each run by `pnpflow/export.py`, or later with
+`python tools/export_csv.py results/<run>`. `#` comment lines first (run, case, units), then
+one header row. Time-dependent lines: `<group>__<quantity>.csv` with the coordinate and one
+column per tau (e.g. `axial__mu.csv`, `radial_Z0.5__phi.csv`); steady lines: `<line>.csv`;
+list-valued `integrals` blocks: `timeseries_<name>.csv`; everything in long form:
+`profiles_long.csv` (`line, tau, coord_name, coord, quantity, value`). NaN = empty cell.
+
 ## plots/*.png
 Static matplotlib images (mesh, mesh zoom, field maps, profiles). The HUD can show them as a gallery.
 
@@ -132,5 +160,7 @@ For gmsh / ParaView. Not read by the HUD.
 
 ## Launching runs
 `python run.py <case> --name <run_name> --set key=value --set key2=value2`
+(`JAX_PLATFORMS=cuda|cpu` picks the device; the servers' `/api/launch` takes
+`device: auto|gpu|cpu` and sets it.)
 `python run.py --list` prints the cases and their default params as JSON:
 `{"cylinder": {"params": {...}, "info": {...}}, ...}`

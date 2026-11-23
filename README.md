@@ -3,19 +3,17 @@
 A steady Poisson–Nernst–Planck + Navier–Stokes finite-element solver. Meshes come from gmsh. Assembly, Jacobians and sensitivities use JAX (`jit` + `vmap` + `jacfwd`). Linear solves use PARDISO.
 Equations and design choices are in `docs/THEORY.md`. The result format the HUD reads is in `docs/DATA_FORMAT.md`.
 
-## Setup (WSL Debian, already done on this machine)
+## Setup
 ```bash
-uv venv -p 3.12 ~/venvs/pnp && source ~/venvs/pnp/bin/activate
-uv pip install "jax[cuda12]" gmsh scipy numpy matplotlib meshio pypardiso
-# gmsh needs libGLU (no sudo): it is unpacked to ~/venvs/pnp/syslib
-# and that folder is added to LD_LIBRARY_PATH by the activate script.
+conda env create -f environment.yml && conda activate pnpflow
+# Linux installs jax[cuda13] automatically; check: python -c "import jax; print(jax.devices())"
 ```
 
 ## Run
 ```bash
-wsl -d Debian -- bash /mnt/c/Users/Gnome/Desktop/VMBox/pnpflow/tools/wsl_run.sh python run.py --list
-wsl -d Debian -- bash .../tools/wsl_run.sh python run.py cylinder --name my_run --set delta=0.05 --set K=20
-wsl -d Debian -- bash .../tools/wsl_run.sh bash tools/validate.sh     # validation cases
+python run.py --list
+python run.py cylinder --name my_run --set delta=0.05 --set K=20
+bash tools/validate.sh     # validation cases
 ```
 Each run writes its outputs to `results/<name>/`:
 - `summary.json`: checks, fluxes, forces, charge balance, sensitivities

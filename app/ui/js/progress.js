@@ -91,6 +91,7 @@ export function runStatus(progress, entry) {
     message: p.message || "",
     timeS: isNum(p.time_s) ? p.time_s : null,
     history: Array.isArray(p.history) ? p.history : [],
+    time: p.time && typeof p.time === "object" && isNum(p.time.t_end) ? p.time : null,
   };
 }
 
@@ -180,4 +181,18 @@ export function convergenceSeries(summary, progress) {
     by.get(s).push(it);
   }
   return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([stage, its]) => ({ stage, its }));
+}
+
+/** Overall bar of a time-dependent run: simulated time over t_end, with step count. */
+export function timeBar(st) {
+  const t = st.time;
+  const frac = st.state === "done" ? 1 : t.t_end > 0 ? Math.min(1, Math.max(0, t.t / t.t_end)) : 0;
+  const pct = Math.round(frac * 100);
+  const tau = isNum(t.tau) ? `\u03c4 = ${fmt(t.tau, 3)} of ${fmt(t.tau_end, 3)}` : `t = ${fmt(t.t, 3)} of ${fmt(t.t_end, 3)}`;
+  const text = `${tau}, step ${t.step ?? "–"}${t.rejects ? `, ${t.rejects} rejected` : ""}`;
+  return h("div.time-progress", {},
+    h("div.time-head", {}, h("span", { text: "Overall progress" }), h("span.spacer"), h("b.mono", { text: `${pct} %` })),
+    h("span.stages.wide", { role: "progressbar", "aria-label": `${text}, ${pct} % done`, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) },
+      h("span.stage-bar", { class: st.state === "failed" ? "failed" : "" }, h("span.fill", { style: { width: `${(frac * 100).toFixed(1)}%` } }))),
+    h("div.small.dim", { text }));
 }

@@ -18,7 +18,7 @@ around a web front end, which runs in a browser for now.
 | House-style figures (cmasher, LaTeX, 300 dpi) on every run | new |
 | Live status (`fraction`, `health`, `tells` in progress.json) | new |
 | Desktop app front end, FreeCAD-style (`app/`) | first version, in a browser |
-| Tauri native window (`app/src-tauri/`) | written, not compiled (no Rust/MSVC on Windows; no WebKitGTK in WSL) |
+| Tauri native window (`app/src-tauri/`) | written, not compiled (no Rust toolchain or WebKitGTK dev libraries installed yet) |
 | MCP agent protocol | specified (`docs/MCP.md`) |
 | Project file for no-code models | planned (`docs/PLAN.md` Phase 1) |
 
@@ -77,9 +77,9 @@ project file.
 ## How to run
 
 ```
-cd C:\Users\Gnome\Desktop\VMBox\pnpflow
-wsl -d Debian -- bash tools/wsl_run.sh python run.py charged_sphere --name sphere_demo
-wsl -d Debian -- bash tools/wsl_run.sh python app/server.py
+conda activate pnpflow
+python run.py charged_sphere --name sphere_demo
+python app/server.py
   → http://localhost:8766/?run=sphere_demo&wb=results&view=field
 ```
 

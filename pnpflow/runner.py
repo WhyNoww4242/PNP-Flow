@@ -5,6 +5,7 @@ import os
 import time
 import traceback
 
+import jax.numpy as jnp
 import numpy as np
 
 from . import output
@@ -37,19 +38,41 @@ def run_case(name, overrides=None, run_name=None, root="results", plots=True,
         raise
     summary["solver"]["wall_time_s"] = time.time() - t_start
     output.write_json(os.path.join(folder, "summary.json"), summary)
+    try:
+        from .export import export_csv
+        n = len(export_csv(folder))
+        log(f"csv: {n} files written to csv/")
+    except Exception as exc:                        # never fail a run on export
+        log(f"  csv export failed: {type(exc).__name__}: {exc}")
     progress.set(state="done", message="finished")
     return summary
+
+
+def _device_info():
+    try:
+        import jax
+        d = jax.devices()
+        return {"platform": d[0].platform, "devices": [str(x) for x in d]}
+    except Exception as exc:                        # pragma: no cover
+        return {"platform": "unknown", "error": str(exc)}
 
 
 def _run(spec, name, params, run_name, folder, progress, plots, log, post):
     # ---- build ----------------------------------------------------------
     t0 = time.time()
+    post["device"] = _device_info()
+    progress.set(device=post["device"])
+    log(f"jax device: {post['device'].get('platform')} "
+        f"({', '.join(post['device'].get('devices', []))})")
     setup = spec["build"](params)
     model = setup.model
     mesh_stats = model.mesh.stats()
     log(f"mesh: {mesh_stats['n_elements']} triangles, {model.ndof} dofs "
         f"({time.time() - t0:.1f}s)")
     pp_checks = _mesh_postprocess(model, setup, folder, post, log)
+    if setup.transient:
+        return _run_transient(spec, name, params, run_name, folder, progress, plots,
+                              log, post, setup, mesh_stats, pp_checks)
 
     # ---- solve ----------------------------------------------------------
     progress.set(state="assembling", message="compiling jax kernels",
@@ -135,6 +158,163 @@ def _run(spec, name, params, run_name, folder, progress, plots, log, post):
             log(f"figures: {len(summary['figures'])} written to figures/ and svg/")
         except Exception as exc:
             pp_checks.append(_pp_warn("figures", exc, log))
+    summary["checks"] = checks + pp_checks
+    return summary
+
+
+def _run_transient(spec, name, params, run_name, folder, progress, plots, log, post,
+                   setup, mesh_stats, pp_checks):
+    """Time-dependent run (setup.transient): adaptive BDF2, profiles at output
+    times, then (optionally) the steady equilibrium for the setup's checks."""
+    from .transient import TransientAssembler, integrate
+    model, tr = setup.model, setup.transient
+    t_end = float(tr["t_end"])
+    t_per = float(tr.get("t_per_tau", 1.0))
+    progress.set(state="assembling", message="compiling jax kernels", n_stages=1)
+    t1 = time.time()
+    asm = Assembler(model)
+    tasm = TransientAssembler(asm)
+    clock = {"t": 0.0, "dt": None, "step": 0, "rejects": 0}
+
+    def time_fraction():
+        return float(min(1.0, clock["t"] / t_end))
+
+    def on_newton(stage, history, status=None):
+        progress.iteration(stage, history, status=status)
+        progress.set(fraction=time_fraction(),
+                     message=f"step {stage}: tau = {clock['t'] / t_per:.4g}, "
+                             f"Newton it {history[-1]['it']}")
+
+    def on_step(info):
+        if info["accepted"]:
+            clock.update(t=info["t"] + info["dt"], dt=info["dt"], step=info["n_steps"] + 1)
+        clock["rejects"] = info["rejects"] + (0 if info["accepted"] else 1)
+        health = "converging" if info["accepted"] else "struggling"
+        tells = dict(progress.data.get("tells") or {})
+        tells.update(dt=info["dt"], newton_its=info["newton_its"], err=info["err"],
+                     rejects=clock["rejects"])
+        progress.set(state="solving", fraction=time_fraction(), health=health, tells=tells,
+                     time={"t": clock["t"], "t_end": t_end, "tau": clock["t"] / t_per,
+                           "tau_end": t_end / t_per, "dt": info["dt"],
+                           "step": clock["step"], "rejects": clock["rejects"]})
+
+    newton = Newton(tasm, tol=1e-9, log=lambda *a: None, on_iteration=on_newton)
+    snapshots = []
+    prm = tr.get("params", setup.base)
+    U0_given = tr.get("U0")
+    U0 = model.initial_guess(prm) if U0_given is None else jnp.asarray(U0_given)
+    progress.set(state="solving", message="time stepping", fraction=0.0, health="converging")
+    U, t, steps, ok = integrate(
+        newton, tasm, U0, prm, t_end, outputs=tr.get("outputs", ()),
+        consistent_init=U0_given is None,
+        dt0=tr.get("dt0", 1e-2), dt_max=tr.get("dt_max"), rtol=tr.get("rtol", 1e-3),
+        on_output=lambda tt, UU: snapshots.append((float(tt), np.asarray(UU))),
+        on_step=on_step, log=log)
+    solve_time = time.time() - t1
+    log(f"time stepping: ok={ok}, {len(steps)} steps to t = {t:.6g} "
+        f"(tau = {t / t_per:.4g}) in {solve_time:.1f}s")
+    if not ok:
+        progress.set(health="failed", message=f"time step failed at tau = {t / t_per:.4g}")
+
+    # ---- analyse --------------------------------------------------------
+    progress.set(state="post", message="analysis")
+    an = Analysis(model, asm, U, prm)
+    fields = an.nodal_fields()
+    checks = [{"name": f"min {s.name} (all times)",
+               "value": float(min(np.min(UU[i * model.n:(i + 1) * model.n])
+                                  for _, UU in snapshots)),
+               "limit": 0.0, "status": "pass", "note": "concentration must stay positive"}
+              for i, s in enumerate(model.species)]
+    for c in checks:
+        c["status"] = "pass" if c["value"] > 0 else "fail"
+    checks.append({"name": "time integration reached t_end", "value": float(t / t_end),
+                   "limit": 1.0, "status": "pass" if ok else "fail",
+                   "note": f"{len(steps)} BDF2 steps, "
+                           f"{sum(s['rejects'] for s in steps)} rejected"})
+    lines, integrals = tr["profiles"](an, snapshots)
+
+    eq_lines, eq_info = [], {}
+    if tr.get("equilibrium") and ok:
+        progress.set(state="solving", message="steady equilibrium check")
+        newton_s = Newton(asm, tol=1e-9, log=log)
+        U_eq = model.initial_guess(setup.base)
+        if setup.path:
+            U_eq, p_eq, ok_eq, st_eq = continuation(newton_s, U_eq, setup.base,
+                                                    setup.path, log=log)
+        else:
+            U_eq, ok_eq, hist = newton_s.solve(U_eq, setup.base)
+            p_eq, st_eq = setup.base, [{"iterations": hist}]
+        eq_info = {"converged": bool(ok_eq),
+                   "newton_its": sum(len(s["iterations"]) - 1 for s in st_eq)}
+        if ok_eq:
+            an_eq = Analysis(model, asm, U_eq, p_eq)
+            an_eq.flux = an_eq.species_fluxes()
+            checks += [dict(c, name=c["name"] + " (equilibrium)")
+                       for c in _common_checks(an_eq, an_eq.nodal_fields())]
+            if setup.extra:
+                more_checks, more = setup.extra(an_eq)
+                checks += more_checks
+                integrals.update(more)
+            if setup.profiles:
+                eq_lines = setup.profiles(an_eq)
+        else:
+            checks.append({"name": "steady equilibrium solve", "value": 1.0, "limit": 0.0,
+                           "status": "warn", "note": "Newton did not converge"})
+
+    profiles = {"lines": lines + eq_lines}
+    output.write_fields(folder, model.mesh, fields, setup.focus_bbox, setup.labels)
+    output.write_json(os.path.join(folder, "profiles.json"), _strip(profiles))
+    output.write_fields_time(folder, model, snapshots, t_per)
+    output.write_meshfiles(folder, model.mesh, fields)
+    np.savez_compressed(os.path.join(folder, "solution.npz"), U=np.asarray(U),
+                        X=model.mesh.X, tri=model.mesh.tri,
+                        t=np.array([s[0] for s in snapshots]),
+                        U_t=np.stack([s[1] for s in snapshots]))
+
+    summary = {
+        "run_name": run_name, "case": name,
+        "created": datetime.datetime.now().isoformat(timespec="seconds"),
+        "input": params,
+        "model": {
+            "species": [{"name": s.name, "z": s.z, "d": s.d, "bulk": s.bulk}
+                        for s in model.species],
+            "flow": model.flow, "advection": model.advection, "supg": model.supg,
+            "coord": getattr(model, "coord", "planar"),
+            "boundaries": _describe_bcs(model),
+            "doc": spec["doc"],
+        },
+        "params": {k: float(v) for k, v in prm.items()},
+        "param_info": spec["info"],
+        "mesh": mesh_stats | {"n_dofs": int(model.ndof)},
+        "solver": {"converged": bool(ok), "time_s": solve_time,
+                   "n_newton_total": sum(s["newton_its"] for s in steps),
+                   "stages": [], "equilibrium": eq_info},
+        "transient": {"scheme": "BDF2 (variable step, first step backward Euler)",
+                      "t_end": t_end, "t_reached": t, "t_per_tau": t_per,
+                      "n_steps": len(steps), "steps": steps,
+                      "output_times": [s[0] for s in snapshots]},
+        "checks": checks,
+        "integrals": integrals,
+        "sensitivities": {},
+        "notes": setup.notes,
+        **post,
+    }
+    summary["figures"] = []
+    if plots:
+        progress.set(state="post", message="figures")
+        from . import figures
+        try:
+            summary["figures"] = figures.write_run_figures(
+                folder, model.mesh, fields, {"lines": eq_lines}, summary,
+                focus=setup.focus_bbox, symmetry=summary["model"]["coord"], log=log)
+        except Exception as exc:
+            pp_checks.append(_pp_warn("figures", exc, log))
+        if tr.get("figures"):
+            try:
+                summary["figures"] += tr["figures"](folder, lines, summary, log)
+            except Exception as exc:
+                pp_checks.append(_pp_warn("case figures", exc, log))
+        log(f"figures: {len(summary['figures'])} written to figures/ and svg/")
     summary["checks"] = checks + pp_checks
     return summary
 

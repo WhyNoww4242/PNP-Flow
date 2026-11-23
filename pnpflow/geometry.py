@@ -213,3 +213,102 @@ def load_msh(path):
         if gmsh.model.mesh.getElementTypes(2).tolist() != [9]:
             gmsh.model.mesh.setOrder(2)
         return mesh_from_gmsh()
+
+
+# ---------------------------------------------------------------------------
+# Axisymmetric pore with a cylindrical reservoir (SDL) in front of it
+# ---------------------------------------------------------------------------
+
+def pore_axisym(L=100.0, alpha_in=1.0, alpha_out=1.0, sdl_radius=2.0,
+                sdl_length=51.5, h_wall=0.125, h_entr=0.0625, h_far=1.0,
+                wall_layer=None, entr_radius=None, save=None):
+    """Pore 0 <= z <= L with wall r = alpha(z), alpha linear from alpha_in (mouth)
+    to alpha_out (end), fed by a cylinder r <= sdl_radius, -sdl_length <= z <= 0.
+
+    Mesh coordinates: x = r >= 0, y = z.  Lengths in units of the reference pore
+    radius a_p, so alpha is the paper's alpha(Z) and Z = z / L.
+
+    Physical groups:
+      curves   : axis (r = 0), sdl_far (z = -sdl_length, bulk), sdl_side
+                 (r = sdl_radius), sdl_face (z = 0, alpha_in < r < sdl_radius),
+                 pore_wall (r = alpha(z)), pore_end (z = L)
+      surfaces : sdl (z < 0), pore (z > 0)
+    Sizes: h_wall within `wall_layer` of the pore wall and end (the whole pore
+    when the pore is no wider than the layer), h_entr inside `entr_radius` of
+    the mouth corner (the re-entrant corner where the charged wall meets the
+    uncharged SDL face, plus the access region), growing to h_far in the SDL.
+    """
+    a_max = max(alpha_in, alpha_out)
+    if not (0 < alpha_in < sdl_radius and alpha_out > 0 and L > 0 and sdl_length > 0):
+        raise ValueError("pore_axisym needs 0 < alpha_in < sdl_radius, alpha_out > 0")
+    wall_layer = wall_layer if wall_layer is not None else a_max
+    entr_radius = entr_radius if entr_radius is not None else 1.5 * a_max
+    with gmsh_session("pore_axisym"):
+        occ = gmsh.model.occ
+        P = [occ.addPoint(*xy, 0) for xy in [
+            (0.0, -sdl_length), (sdl_radius, -sdl_length), (sdl_radius, 0.0),
+            (alpha_in, 0.0), (alpha_out, L), (0.0, L), (0.0, 0.0)]]
+        lines = {
+            "sdl_far": occ.addLine(P[0], P[1]),
+            "sdl_side": occ.addLine(P[1], P[2]),
+            "sdl_face": occ.addLine(P[2], P[3]),
+            "pore_wall": occ.addLine(P[3], P[4]),
+            "pore_end": occ.addLine(P[4], P[5]),
+            "axis_pore": occ.addLine(P[5], P[6]),
+            "axis_sdl": occ.addLine(P[6], P[0]),
+            "mouth": occ.addLine(P[6], P[3]),        # interior line z = 0
+        }
+        l = lines
+        sdl_loop = occ.addCurveLoop([l["sdl_far"], l["sdl_side"], l["sdl_face"],
+                                     -l["mouth"], l["axis_sdl"]])
+        pore_loop = occ.addCurveLoop([l["mouth"], l["pore_wall"], l["pore_end"],
+                                      l["axis_pore"]])
+        s_sdl = occ.addPlaneSurface([sdl_loop])
+        s_pore = occ.addPlaneSurface([pore_loop])
+        occ.synchronize()
+
+        for name in ("sdl_far", "sdl_side", "sdl_face", "pore_wall", "pore_end"):
+            _name(1, [l[name]], name)
+        _name(1, [l["axis_pore"], l["axis_sdl"]], "axis")
+        _name(2, [s_sdl], "sdl")
+        _name(2, [s_pore], "pore")
+
+        f = gmsh.model.mesh.field
+        # pore wall + end: EDL resolution
+        d_wall = f.add("Distance")
+        f.setNumbers(d_wall, "CurvesList", [l["pore_wall"], l["pore_end"]])
+        f.setNumber(d_wall, "Sampling", int(max(400, 4 * L / h_wall)))
+        t_wall = f.add("Threshold")
+        f.setNumber(t_wall, "InField", d_wall)
+        f.setNumber(t_wall, "SizeMin", h_wall)
+        f.setNumber(t_wall, "SizeMax", h_far)
+        f.setNumber(t_wall, "DistMin", wall_layer)
+        f.setNumber(t_wall, "DistMax", wall_layer + 8 * a_max)
+        # mouth corner: extra refinement (re-entrant corner, access resistance)
+        d_corner = f.add("Distance")
+        f.setNumbers(d_corner, "PointsList", [P[3]])
+        t_corner = f.add("Threshold")
+        f.setNumber(t_corner, "InField", d_corner)
+        f.setNumber(t_corner, "SizeMin", h_entr)
+        f.setNumber(t_corner, "SizeMax", h_far)
+        f.setNumber(t_corner, "DistMin", 0.25 * entr_radius)
+        f.setNumber(t_corner, "DistMax", 0.25 * entr_radius + 12 * a_max)
+        # access region in front of the mouth: at least h_wall inside entr_radius
+        d_mouth = f.add("Distance")
+        f.setNumbers(d_mouth, "CurvesList", [l["mouth"]])
+        t_mouth = f.add("Threshold")
+        f.setNumber(t_mouth, "InField", d_mouth)
+        f.setNumber(t_mouth, "SizeMin", h_wall)
+        f.setNumber(t_mouth, "SizeMax", h_far)
+        f.setNumber(t_mouth, "DistMin", entr_radius)
+        f.setNumber(t_mouth, "DistMax", entr_radius + 12 * a_max)
+        final = f.add("Min")
+        f.setNumbers(final, "FieldsList", [t_wall, t_corner, t_mouth])
+        f.setAsBackgroundMesh(final)
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+        mesh = _finish(save)
+    on_axis = np.abs(mesh.X[:, 0]) < 1e-9 * L
+    mesh.X[on_axis, 0] = 0.0
+    return mesh

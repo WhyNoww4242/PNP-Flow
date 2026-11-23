@@ -8,9 +8,9 @@
 import { h, setChildren, fmt, fmtValue, isNum, prettyName, placeholder, stripUnit } from "./util.js";
 import { icon } from "./icons.js";
 import { bridge } from "./bridge.js";
-import { plot, baseLayout, seriesColors } from "./plots.js";
+import { plot, baseLayout, seriesColors, residualPlot } from "./plots.js";
 import { boundaryColor } from "./fieldview.js";
-import { runStatus, healthBadge, stageBars, tellsGrid, convergenceSeries } from "./progress.js";
+import { runStatus, healthBadge, stageBars, timeBar, tellsGrid, convergenceSeries } from "./progress.js";
 import { caseTitle, caseDoc } from "./start.js";
 
 const GEOM_RE = /^(R|R_out|radius|length|width|half_width|upstream|downstream|L|H|W|r_?\w*|h_\w+|.*_size|domain\w*|far\w*)$/;
@@ -208,6 +208,30 @@ export function renderStudy(app, doc, root) {
   const overwrite = h("input", { type: "checkbox", checked: !!doc.overwrite, onchange: (e) => { doc.overwrite = e.target.checked; } });
   const cmd = h("code.cmd");
   const msg = h("div", { "aria-live": "polite" });
+  const devNote = h("span.small.dim", { text: "checking devices…" });
+  const devDot = h("span.dev-dot", { role: "img", "aria-label": "checking devices" });
+  let gpuFound = null;
+  const setDot = () => {
+    // a finished or running run reports the platform it used; otherwise show what the selection will pick
+    const used = doc.progress && doc.progress.device && doc.progress.device.platform;
+    const gpu = used ? used !== "cpu" : gpuFound === null ? null : devSel.value !== "cpu" && gpuFound;
+    const word = gpu === null ? "checking devices" : gpu ? (used ? "This run used the GPU" : "The GPU will be used") : (used ? "This run used the CPU" : "The CPU will be used");
+    devDot.className = `dev-dot ${gpu === null ? "" : gpu ? "on" : "off"}`;
+    devDot.setAttribute("aria-label", word); devDot.dataset.tip = word; devDot.title = word;
+  };
+  const devSel = h("select.sel#run-device", { "aria-label": "Compute device", title: "Where JAX assembles the residual and Jacobian (the sparse solve runs on the CPU)",
+    onchange: (e) => { app.setDevice(e.target.value); updateCmd(); setDot(); } },
+    h("option", { value: "auto", text: "Auto (GPU when present)" }),
+    h("option", { value: "gpu", text: "GPU" }),
+    h("option", { value: "cpu", text: "CPU" }));
+  devSel.value = app.device();
+  app.devices().then((dv) => {
+    const gpuOpt = devSel.querySelector('option[value="gpu"]');
+    gpuOpt.disabled = !dv.gpu;
+    if (!dv.gpu && devSel.value === "gpu") { devSel.value = "auto"; app.setDevice("auto"); updateCmd(); }
+    gpuFound = !!dv.gpu; setDot();
+    devNote.textContent = dv.gpu ? `GPU found: ${(dv.devices || []).join(", ")}` : (dv.error ? `No GPU (${dv.error.slice(0, 120)})` : "No GPU found; runs use the CPU");
+  });
   const updateCmd = () => { cmd.textContent = app.commandLine(doc, nameIn.value.trim()); };
   updateCmd();
   const st = app.statusOf(doc);
@@ -220,6 +244,8 @@ export function renderStudy(app, doc, root) {
       h("span.mono", { text: changed.map((r) => `${r.key} = ${fmt(r.value)}`).join(", ") })) : h("div.small.dim", { text: rows.length ? "All parameters at their template values (edit them in the Data tab)." : "Template parameters are not loaded yet." }),
     h("div.form-row", {}, h("label.lbl", { for: "run-name", text: "Run name" }), nameIn),
     h("div.form-row", {}, h("span.lbl"), h("label.chk", {}, overwrite, h("span", { text: "Replace an existing run with this name" }))),
+    h("div.form-row", {}, h("label.lbl", { for: "run-device", text: "Device" }), devSel),
+    h("div.form-row", {}, h("span.lbl"), devDot, devNote),
     app.S.expert ? cmd : null,
     h("div.form-row", {}, solveBtn, stopBtn, h("span.small.dim", { text: "F8 solve · Shift+F8 stop" })),
     msg));
@@ -252,22 +278,13 @@ export async function updateStudy(app, doc) {
   }
   setChildren(els.live, h("div.stack", {},
     h("div.health-row", {}, healthBadge(st), h("span.mono", { text: doc.name }), h("span.msgline", { text: st.message || "" })),
-    stageBars(st, { wide: true }),
-    h("div.small.dim", { text: st.fraction === null && st.running ? "The solver does not report how far the current stage is, so its bar is indeterminate." : st.nStages ? `Stage ${Math.min(st.stage || 1, st.nStages)} of ${st.nStages}${st.fraction !== null ? `, ${(st.fraction * 100).toFixed(0)} % done` : ""}` : "" }),
+    st.time ? timeBar(st) : null,
+    st.time ? null : stageBars(st, { wide: true }),
+    st.time ? null : h("div.small.dim", { text: st.fraction === null && st.running ? "The solver does not report how far the current stage is, so its bar is indeterminate." : st.nStages ? `Stage ${Math.min(st.stage || 1, st.nStages)} of ${st.nStages}${st.fraction !== null ? `, ${(st.fraction * 100).toFixed(0)} % done` : ""}` : "" }),
     tellsGrid(st)));
   const series = convergenceSeries(st.running ? null : doc.summary, doc.progress);
   if (series.length) {
-    const colors = seriesColors(Math.max(2, series.length));
-    let x0 = 0;
-    plot(els.plotEl, series.map((s, i) => {
-      const xs = s.its.map((_, k) => x0 + k);
-      x0 += s.its.length;
-      return { x: xs, y: s.its.map((it) => it.res_norm), type: "scatter", mode: "lines+markers", name: `stage ${s.stage}`,
-        line: { color: colors[i % colors.length], width: 2.5 }, marker: { size: 6 },
-        customdata: s.its.map((it) => [it.it, it.alpha]), hovertemplate: `stage ${s.stage}, iteration %{customdata[0]}<br>‖R‖ = %{y:.3e}<br>α = %{customdata[1]}<extra></extra>` };
-    }), baseLayout({ margin: { l: 58, r: 10, t: 8, b: 40 }, yaxis: { type: "log", title: { text: "residual ‖R‖" } },
-      xaxis: { title: { text: "Newton iteration (all stages)" }, dtick: x0 < 16 ? 1 : undefined }, showlegend: series.length > 1, legend: { orientation: "h", y: 1.12, x: 1, xanchor: "right" } }),
-    { displayModeBar: false });
+    residualPlot(els.plotEl, series, { label: st.time ? "time step" : "stage" });
   } else setChildren(els.plotEl, placeholder(st.running ? "loading" : "empty", st.running ? "Waiting for the first Newton iteration" : "No iteration history"));
   try {
     const r = await bridge.log(doc.name, 128 * 1024);

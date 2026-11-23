@@ -167,6 +167,25 @@ def write_fields(folder, mesh, fields, focus_bbox=None, labels=None):
     write_json(os.path.join(folder, "fields.json"), data)
 
 
+def write_fields_time(folder, model, snapshots, t_per_tau=1.0, digits=5):
+    """fields_time.json: the primary fields (each species, rho, phi) at every output
+    time, one value per P2 node like fields.json, for the app's time slider.
+    snapshots = [(t, U)]; the unknown layout is [c_1..c_S, phi, ...] in blocks of n."""
+    n, S = model.n, len(model.species)
+    fields = {}
+    for i, sp in enumerate(model.species):
+        fields[sp.name] = [_round(U[i * n:(i + 1) * n], digits) for _, U in snapshots]
+    if S:
+        fields["rho"] = [_round(sum(sp.z * np.asarray(U[i * n:(i + 1) * n])
+                                    for i, sp in enumerate(model.species)), digits)
+                         for _, U in snapshots]
+    fields["phi"] = [_round(U[S * n:(S + 1) * n], digits) for _, U in snapshots]
+    t = [float(tt) for tt, _ in snapshots]
+    write_json(os.path.join(folder, "fields_time.json"),
+               {"t": t, "tau": [x / t_per_tau for x in t], "t_per_tau": t_per_tau,
+                "n_nodes": int(n), "fields": fields})
+
+
 # ----------------------------------------------------------------------
 # ParaView / gmsh
 # ----------------------------------------------------------------------

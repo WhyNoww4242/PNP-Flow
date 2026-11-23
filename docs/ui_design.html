@@ -674,7 +674,7 @@ const QUESTIONS = [
         ["Both, with a beginner / expert switch", "Guided by default, advanced panels on demand."],
         ["Students / teaching", "Fast templates, clear pictures, small problems."]] },
     { id: "platform", title: "Which operating systems must it run on?", type: "many",
-      why: "The solver runs in WSL today. A native Windows app would talk to WSL or to a bundled Python.",
+      why: "A native Windows app would need a bundled Python or a remote solver.",
       opts: [["Windows"], ["Linux"], ["macOS"], ["Remote: solve on a workstation or cluster, view locally"]] },
     { id: "python", title: "How should users get the Python/JAX side?", type: "one",
       why: "JAX, gmsh and PARDISO are the hard part of installing.",

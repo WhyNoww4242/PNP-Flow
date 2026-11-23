@@ -107,6 +107,26 @@ export function prepareMesh(json, opts = {}) {
   };
 }
 
+/** Time series of nodal fields (fields_time.json) as Float32Arrays on the prepared mesh (mirrored like the fields). */
+export function prepareTimeFields(json, mesh) {
+  if (!json || !Array.isArray(json.t) || !json.fields) return null;
+  const { n, n0, mirrored } = mesh;
+  const fields = {};
+  for (const [name, frames] of Object.entries(json.fields)) {
+    if (!Array.isArray(frames) || frames.length !== json.t.length) continue;
+    const out = frames.map((arr) => {
+      if (!Array.isArray(arr) || arr.length !== n0) return null;
+      const f = new Float32Array(n);
+      for (let i = 0; i < n0; i++) { const v = arr[i]; f[i] = v === null || v === undefined ? NaN : +v; }
+      if (mirrored) for (let i = 0; i < n0; i++) f[i + n0] = f[i];
+      return f;
+    });
+    if (out.every(Boolean)) fields[name] = out;
+  }
+  if (!Object.keys(fields).length) return null;
+  return { t: json.t.map(Number), tau: Array.isArray(json.tau) ? json.tau.map(Number) : null, fields };
+}
+
 function validBox(b) {
   return Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[1] > b[0] && b[3] > b[2]
     ? b.map(Number) : null;
@@ -451,7 +471,7 @@ export class GLRenderer {
     gl.clearColor(0, 0, 0, 0); // transparent: the CSS hatch shows "outside the mesh"
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (!this.mesh || !this.nTriIdx) return;
-    const sx = (2 * view.ppu) / W, sy = (2 * view.ppu) / H;
+    const sx = (2 * view.ppu) / W, sy = (2 * view.ppu * (view.ky || 1)) / H;
     const idxType = gl.UNSIGNED_INT;
 
     // field

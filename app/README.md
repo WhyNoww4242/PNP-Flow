@@ -7,12 +7,12 @@ the same `ui/` folder becomes the Tauri 2 window later.
 ## Run it
 
 ```bash
-# from the pnpflow root, inside WSL (the venv has the solver's Python deps)
-bash tools/wsl_run.sh python app/server.py            # http://localhost:8766
+# from the repo root, inside the pnpflow conda env
+python app/server.py            # http://localhost:8766
 # options: --port 8766 --host 127.0.0.1 --results DIR --python EXE
 ```
 
-Open **http://localhost:8766** in a Windows browser (Edge or Chrome). Useful links:
+Open **http://localhost:8766** in a browser. Useful links:
 
 | link | shows |
 |---|---|
@@ -106,22 +106,17 @@ commands that mirror the HTTP API (`list_runs`, `run_listing`, `read_run_file`,
 `read_run_file_base64`, `read_run_log`, `list_cases`, `launch_run`, `stop_run`) and the same
 name / path checks as the server.
 
-**It has never been compiled**: WSL here lacks the webkit2gtk dev libraries (no sudo) and
-Windows has no Rust toolchain. Expect small fixes on the first build.
+**It has never been compiled** (needs the Rust toolchain and, on Linux, the webkit2gtk dev
+libraries). Expect small fixes on the first build.
 
-Windows prerequisites:
-1. Rust via **rustup** (`rustup-init.exe`, stable MSVC toolchain).
-2. **Microsoft C++ Build Tools** (Visual Studio Build Tools, "Desktop development with C++").
-3. **WebView2 runtime** (preinstalled on Windows 10/11; otherwise the Evergreen installer).
-4. The Tauri CLI: `cargo install tauri-cli --version "^2"`.
+Prerequisites: Rust via rustup, the Tauri CLI (`cargo install tauri-cli --version "^2"`), and
+on Linux the webkit2gtk-4.1 dev packages (see the Tauri 2 prerequisites page).
 
 Then, from `app/src-tauri`:
-```powershell
-$env:PNPFLOW_ROOT = "C:\Users\Gnome\Desktop\VMBox\pnpflow"
-$env:PNPFLOW_PYTHON = "wsl -d Debian -- bash tools/wsl_run.sh python"   # solver runs in WSL
+```bash
+export PNPFLOW_ROOT="$(git rev-parse --show-toplevel)"
+export PNPFLOW_PYTHON="python"     # the pnpflow conda env must be active
 cargo tauri dev
 ```
 First-build checklist: generate icons (`cargo tauri icon some.png`) before bundling; check
-that Plotly runs under the CSP (it is allowed `unsafe-eval`); a run launched through `wsl`
-is stopped by killing the `wsl.exe` process, which may leave the Python process running in
-WSL (needs a proper stop signal later).
+that Plotly runs under the CSP (it is allowed `unsafe-eval`).

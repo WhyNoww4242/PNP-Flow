@@ -3,6 +3,10 @@
 // Custom glyphs for electrochemistry: ion, electrode, mesh, boundary, double layer.
 
 const P = {
+  "home": "M4 11l8-7 8 7 M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9",
+  "zoom-in": "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M20 20l-4-4 M11 8v6 M8 11h6",
+  "zoom-out": "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14z M20 20l-4-4 M8 11h6",
+  "rescale": "M4 20V4 M4 20h16 M8 8l-3-3 M5 5l3 0 M5 5l0 3 M16 16l3 3 M19 19l-3 0 M19 19l0-3 M8 16h4 M16 8v4",
   // files and app
   "file-plus": "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z M14 3v5h5 M12 11v6 M9 14h6",
   "folder-open": "M3 19V6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v2 M3 19l2.6-7.2A2 2 0 0 1 7.5 10.5H21l-2.8 7.7A2 2 0 0 1 16.3 19.5H3.5",

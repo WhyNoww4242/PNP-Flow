@@ -4,7 +4,7 @@
 import { h, setChildren, fmt, fmtValue, fmtDuration, isNum, prettyName, placeholder, isSignedFieldName } from "./util.js";
 import { icon } from "./icons.js";
 import { bridge } from "./bridge.js";
-import { plot, baseLayout, seriesColors } from "./plots.js";
+import { plot, baseLayout, seriesColors, residualPlot } from "./plots.js";
 import { colormapSource } from "./colormaps.js";
 import { convergenceSeries } from "./progress.js";
 import { checksList, checkCounts, renderMesh } from "./pages.js";
@@ -69,6 +69,7 @@ async function showField(app, doc, body) {
     fv.docId = doc.id;
     fv.meshKey = app.meshKey(doc);
     fv.setMesh(mesh);
+    app.loadTimeSeries(doc, mesh).then((ts) => { if (ts && fv.mesh === mesh) fv.setTimeSeries(ts); });
     if (mesh.bad) app.toast(`fields.json: ${mesh.bad} triangle indices were out of range and were clamped`, "warn");
   } catch (e) {
     fv.showMessage("error", "Could not read fields.json", e.message);
@@ -166,17 +167,7 @@ function showChecks(app, doc, body) {
   const series = convergenceSeries(s, doc.progress);
   requestAnimationFrame(() => {
     if (!series.length) return setChildren(convEl, placeholder("empty", "No iteration history"));
-    const colors = seriesColors(Math.max(2, series.length));
-    let x0 = 0;
-    plot(convEl, series.map((st, i) => {
-      const xs = st.its.map((_, k) => x0 + k);
-      x0 += st.its.length;
-      return { x: xs, y: st.its.map((it) => it.res_norm), type: "scatter", mode: "lines+markers", name: `stage ${st.stage}`,
-        line: { color: colors[i % colors.length], width: 2.5 }, marker: { size: 6 },
-        hovertemplate: `stage ${st.stage}<br>‖R‖ = %{y:.3e}<extra></extra>` };
-    }), baseLayout({ margin: { l: 58, r: 10, t: 8, b: 40 }, yaxis: { type: "log", title: { text: "residual ‖R‖" } },
-      xaxis: { title: { text: "Newton iteration (all stages)" }, dtick: x0 < 16 ? 1 : undefined }, showlegend: series.length > 1, legend: { orientation: "h", y: 1.1, x: 1, xanchor: "right" } }),
-    { displayModeBar: false });
+    residualPlot(convEl, series, { label: doc.progress && doc.progress.time ? "time step" : "stage" });
   });
 }
 

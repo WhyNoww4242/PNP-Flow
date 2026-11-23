@@ -15,7 +15,9 @@ GET  /api/run/<name>/<file>         summary.json | fields.json | profiles.json |
                                     progress.json | stdout.log | plots/<img>.png
 GET  /api/run/<name>/log?tail=N     last N bytes of stdout.log (default 64 KiB)
 GET  /api/cases                     output of `python run.py --list` ({} if unavailable)
-POST /api/launch                    {case, name, params:{k:v}, overwrite?} -> spawn run.py
+POST /api/launch                    {case, name, params:{k:v}, overwrite?, device?} -> spawn run.py
+                                    device: "auto" (default) | "cpu" | "gpu" (sets JAX_PLATFORMS)
+GET  /api/devices                   {"gpu": bool, "devices": [...], "error"?} (probed once, cached)
 POST /api/stop                      {name} -> terminate a run launched by this server
 """
 import argparse
@@ -45,7 +47,7 @@ NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}$")
 CASE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]{0,63}$")
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.\-+]{0,63}$")
 PLOT_RE = re.compile(r"^plots/[A-Za-z0-9_.\-+]{1,128}\.(png|jpg|jpeg|svg)$", re.I)
-RUN_FILES = {"summary.json", "fields.json", "profiles.json", "progress.json", "stdout.log"}
+RUN_FILES = {"summary.json", "fields.json", "fields_time.json", "profiles.json", "progress.json", "stdout.log"}
 FINAL_STATES = {"done", "failed"}
 
 # Processes spawned through /api/launch: name -> {"proc", "started", "cmd"}
@@ -57,6 +59,34 @@ GZ_CACHE = {}
 GZ_LOCK = threading.Lock()
 
 CASES_CACHE = {"key": None, "time": 0.0, "data": None, "error": None}
+
+# JAX platform per launch device; "auto" leaves JAX to choose (GPU when present)
+DEVICE_ENV = {"cpu": "cpu", "gpu": "cuda"}
+DEVICES_CACHE = {"data": None}
+DEVICES_LOCK = threading.Lock()
+
+
+def get_devices():
+    """Which JAX devices the solver's Python sees (probed once, then cached)."""
+    with DEVICES_LOCK:
+        if DEVICES_CACHE["data"] is not None:
+            return DEVICES_CACHE["data"]
+        code = ("import json, jax\n"
+                "try:\n    g = [str(d) for d in jax.devices('gpu')]\n"
+                "except Exception:\n    g = []\n"
+                "print(json.dumps({'gpu': bool(g), 'devices': [str(d) for d in jax.devices()]}))")
+        try:
+            out = subprocess.run([CONFIG["python"], "-c", code], capture_output=True,
+                                 text=True, timeout=120)
+            line = out.stdout.strip().splitlines()[-1] if out.stdout.strip() else "{}"
+            data = json.loads(line)
+            if out.returncode != 0:
+                data["error"] = out.stderr.strip()[-300:]
+        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired) as e:
+            data = {"gpu": False, "devices": [], "error": "device probe failed: %s" % e}
+        data.setdefault("gpu", False)
+        DEVICES_CACHE["data"] = data
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +270,9 @@ def launch(body):
         return 400, {"error": "invalid run name (letters, digits, _ . - only)"}
     if not isinstance(params, dict):
         return 400, {"error": "params must be an object"}
+    device = str(body.get("device") or "auto")
+    if device not in ("auto", "cpu", "gpu"):
+        return 400, {"error": "device must be auto, cpu or gpu"}
     run_py = os.path.join(ROOT, "run.py")
     if not os.path.isfile(run_py):
         return 409, {"error": "run.py not found in %s" % ROOT}
@@ -261,10 +294,14 @@ def launch(body):
     if body.get("overwrite") and os.path.exists(old):
         os.remove(old)
     log = open(os.path.join(path, "stdout.log"), "w", encoding="utf-8")
-    log.write("# launched by HUD %s\n# %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"),
-                                               " ".join(cmd)))
+    log.write("# launched by HUD %s\n# %s\n# device: %s\n" % (
+        time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(cmd), device))
     log.flush()
     env = dict(os.environ, PYTHONUNBUFFERED="1")
+    if device in DEVICE_ENV:
+        env["JAX_PLATFORMS"] = DEVICE_ENV[device]
+    else:
+        env.pop("JAX_PLATFORMS", None)
     try:
         proc = subprocess.Popen(cmd, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, env=env)
@@ -272,9 +309,10 @@ def launch(body):
         log.close()
         return 500, {"error": "spawn failed: %s" % e}
     with PROCS_LOCK:
-        PROCS[name] = {"proc": proc, "started": time.time(), "cmd": cmd, "log": log}
+        PROCS[name] = {"proc": proc, "started": time.time(), "cmd": cmd, "log": log,
+                       "device": device}
     threading.Thread(target=_reap, args=(name, proc, log), daemon=True).start()
-    return 200, {"ok": True, "name": name, "pid": proc.pid, "cmd": cmd}
+    return 200, {"ok": True, "name": name, "pid": proc.pid, "cmd": cmd, "device": device}
 
 
 def _reap(name, proc, log):
@@ -425,6 +463,8 @@ class Handler(BaseHTTPRequestHandler):
                 "server_time": time.time()})
         if rest == "runs":
             return self.send_json({"runs": list_runs(), "results": results_dir()})
+        if rest == "devices":
+            return self.send_json(get_devices())
         if rest == "cases":
             data, err = get_cases()
             extra = {"X-Cases-Error": err.replace("\n", " ")[:300]} if err else None

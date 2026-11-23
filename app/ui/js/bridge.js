@@ -88,6 +88,7 @@ const httpBridge = {
   launch: (body) => getJSON("/api/launch", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   }),
+  devices: () => getJSON("/api/devices"),
   stop: (name) => getJSON("/api/stop", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
   }),
@@ -120,6 +121,8 @@ const tauriBridge = {
     }
   },
   launch: (body) => call("launch_run", { request: body }),
+  // the Tauri launcher does not pass a device yet: JAX picks (GPU when present)
+  devices: async () => ({ gpu: false, devices: [], error: "device choice is not wired into the desktop shell yet" }),
   stop: (name) => call("stop_run", { name }),
   async colormaps() {
     // frontendDist is bundled, so the static file is reachable through fetch here too

@@ -6,7 +6,7 @@ import { bridge, optional, inTauri } from "./bridge.js";
 import { h, $, $$, setChildren, fmt, store, debounce, placeholder, unitOf, stripUnit, sameValue, prettyName, isNum } from "./util.js";
 import { icon } from "./icons.js";
 import { initColormaps, colormapNames, colormapType, colormapSource } from "./colormaps.js";
-import { prepareMesh } from "./glfield.js";
+import { prepareMesh, prepareTimeFields } from "./glfield.js";
 import { FieldView, boundaryColor } from "./fieldview.js";
 import { resizeAll } from "./plots.js";
 import { runStatus, healthBadge, stageBars, RUNNING, STATE_WORD, isStale } from "./progress.js";
@@ -108,8 +108,15 @@ function changedParams(doc) {
 
 app.commandLine = (doc, name) => {
   const sets = Object.entries(changedParams(doc)).map(([k, v]) => ` --set ${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("");
-  return `python run.py ${doc.case} --name ${name || "<name>"}${sets}`;
+  const env = { cpu: "JAX_PLATFORMS=cpu ", gpu: "JAX_PLATFORMS=cuda " }[app.device()] || "";
+  return `${env}python run.py ${doc.case} --name ${name || "<name>"}${sets}`;
 };
+
+// Compute device for new runs: "auto" | "cpu" | "gpu" (remembered per browser)
+app.device = () => { try { return localStorage.getItem("pnpflow.device") || "auto"; } catch { return "auto"; } };
+app.setDevice = (v) => { try { localStorage.setItem("pnpflow.device", v); } catch { /* storage blocked */ } };
+let devicesPromise = null;
+app.devices = () => (devicesPromise ||= bridge.devices().catch((e) => ({ gpu: false, devices: [], error: e.message })));
 
 // ---------------------------------------------------------------------------
 // Toasts, tooltip, lightbox, dialogs
@@ -161,7 +168,7 @@ function initTooltips() {
     const t = e.target.closest && e.target.closest("[data-tip],[data-tip-title]");
     if (t === tip.target) return;
     hideTip();
-    if (!t) return;
+    if (!t || document.querySelector(".menu.open")) return;   // no tooltips over an open menu
     tip.target = t;
     tip.timer = setTimeout(() => tip.target === t && t.isConnected && showTip(t), e.type === "focusin" ? 0 : 380);
   };
@@ -374,6 +381,7 @@ function fillMenu(mi) {
 
 function openMenu(mi, focusFirst) {
   closeMenus();
+  hideTip();
   const wrap = $(`.menu[data-idx="${mi}"]`);
   fillMenu(mi);
   wrap.classList.add("open");
@@ -825,7 +833,7 @@ async function loadRunData(d, { quiet = false } = {}) {
       (listing.mesh_files || []).includes("mesh/diagnose.json") ? optional(bridge.json(d.name, "mesh/diagnose.json")) : null,
     ]);
     const fStamp = has("fields.json") ? `${listing.files["fields.json"].mtime}:${listing.files["fields.json"].size}` : null;
-    if (fStamp !== d.fieldsStamp) { d.fieldsJSON = null; d.mesh = null; d.fieldsStamp = fStamp; if (app.field.docId === d.id) app.field.docId = null; }
+    if (fStamp !== d.fieldsStamp) { d.timeJSON = null; d.timePromise = null; d.fieldsJSON = null; d.mesh = null; d.fieldsStamp = fStamp; if (app.field.docId === d.id) app.field.docId = null; }
     Object.assign(d, { listing, summary, progress, profiles, diagnose, error: null });
     if (!d.case && summary && summary.case) d.case = summary.case;
     if (!d.case && listing.entry && listing.entry.case) d.case = listing.entry.case;
@@ -856,6 +864,16 @@ app.loadMesh = async (d, onProgress) => {
   d.meshKey = app.meshKey(d);
   renderTree();
   return d.mesh;
+};
+
+/** Time series of the primary fields for the time slider, or null (steady run / old run without the file). */
+app.loadTimeSeries = async (d, mesh, onProgress) => {
+  if (!d.listing || !d.listing.files || !d.listing.files["fields_time.json"]) return null;
+  if (!d.timeJSON) {
+    d.timePromise ||= bridge.jsonProgress(d.name, "fields_time.json", onProgress).finally(() => { d.timePromise = null; });
+    try { d.timeJSON = await d.timePromise; } catch { return null; }
+  }
+  return prepareTimeFields(d.timeJSON, mesh);
 };
 
 // ---------------------------------------------------------------------------
@@ -1023,7 +1041,7 @@ app.solve = async (d, { name, overwrite, msgEl } = {}) => {
   if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(name)) return say("error", "Run names use letters, digits, '_', '.' and '-' only, and start with a letter, digit or '_'.");
   say("info", `Starting ${name}…`);
   try {
-    await bridge.launch({ case: d.case, name, params: changedParams(d), overwrite: !!(overwrite ?? d.overwrite) });
+    await bridge.launch({ case: d.case, name, params: changedParams(d), overwrite: !!(overwrite ?? d.overwrite), device: app.device() });
   } catch (e) {
     const exists = /exists/.test(e.message);
     return say("error", exists ? `A run called '${name}' already exists. Choose another name or tick "Replace an existing run".` : `Could not start the run: ${e.message}`);
@@ -1076,7 +1094,7 @@ function setConn(ok, why) {
   const c = $("#conn");
   c.className = `conn ${ok ? "ok" : "off"}`;
   $(".conn-text", c).textContent = ok ? (inTauri ? "Local" : "Server connected") : "Server unreachable";
-  c.dataset.tip = ok ? `Results: ${S.resultsDir}` : `The app cannot reach its backend (${why || "no answer"}). Start it with: bash tools/wsl_run.sh python app/server.py`;
+  c.dataset.tip = ok ? `Results: ${S.resultsDir}` : `The app cannot reach its backend (${why || "no answer"}). Start it with: python app/server.py`;
 }
 
 async function poll() {

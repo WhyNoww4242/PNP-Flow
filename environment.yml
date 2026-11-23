@@ -1,4 +1,4 @@
-# pnpflow solver environment (Windows via WSL, Linux, macOS).
+# pnpflow solver environment (Linux, macOS).
 #   conda env create -f environment.yml      (or: mamba / micromamba)
 #   conda activate pnpflow
 # The desktop app creates this env on first run if it is missing.
@@ -7,8 +7,9 @@
 # - gmsh comes from conda-forge, so no system libGLU is needed.
 # - pypardiso needs Intel MKL (x86_64 only). On Apple Silicon it is skipped
 #   and the solver falls back to SciPy's SuperLU (slower, same answers).
-# - GPU (Linux + NVIDIA): after creating the env run
-#     pip install -U "jax[cuda12]"
+# - GPU: on Linux the env installs jax[cuda13] (CUDA 13 wheels bundle their own
+#   CUDA runtime; only a recent NVIDIA driver is needed). macOS gets CPU jax.
+#   Check with: python -c "import jax; print(jax.devices())"
 # - LaTeX figures (text.usetex) need a TeX install (TeX Live / MiKTeX / MacTeX).
 #   Without one, plots fall back to matplotlib mathtext with a Times-like font.
 name: pnpflow
@@ -26,6 +27,7 @@ dependencies:
   - pyyaml
   - pip
   - pip:
-      - jax
+      - jax[cuda13]; sys_platform == "linux"
+      - jax; sys_platform != "linux"
       - pypardiso; platform_machine == "x86_64" or platform_machine == "AMD64"
       - mcp

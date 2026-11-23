@@ -7,7 +7,7 @@ Plotly ships in `static/vendor/`.
 ## Launch
 
 ```bash
-# from the pnpflow root (WSL: source ~/venvs/pnp/bin/activate first)
+# from the repo root, inside the pnpflow conda env
 python hud/server.py              # -> http://localhost:8765/
 python hud/server.py --port 9000 --host 0.0.0.0 --results /path/to/results --python /path/to/python
 ```

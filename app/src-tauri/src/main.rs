@@ -8,8 +8,6 @@
 // Configuration (environment):
 //   PNPFLOW_ROOT    folder with run.py (default: the first ancestor of the current dir with run.py)
 //   PNPFLOW_PYTHON  command that runs Python, split on whitespace. Default "python".
-//                   On Windows with the solver in WSL:  "wsl -d Debian -- bash tools/wsl_run.sh python"
-//                   (the solver then sees the root as /mnt/c/..., so keep PNPFLOW_ROOT on C:).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -25,7 +23,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const RUN_FILES: [&str; 5] = ["summary.json", "fields.json", "profiles.json", "progress.json", "stdout.log"];
+const RUN_FILES: [&str; 6] = ["summary.json", "fields.json", "fields_time.json", "profiles.json", "progress.json", "stdout.log"];
 
 struct Procs(Mutex<HashMap<String, (Child, Vec<String>, f64)>>);
 

@@ -31,6 +31,7 @@ class Setup:
     sens_params: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     labels: dict = field(default_factory=dict)
+    transient: dict = None                       # time-dependent run (see runner)
 
 
 def case(name, defaults, info):
@@ -538,3 +539,7 @@ def _check(name, value, limit, note, warn_only=False):
     status = "pass" if ok else ("warn" if warn_only else "fail")
     return {"name": name, "value": float(value), "limit": float(limit),
             "status": status, "note": note}
+
+
+# time-dependent cases live in their own modules and register themselves here
+from . import pore  # noqa: E402,F401

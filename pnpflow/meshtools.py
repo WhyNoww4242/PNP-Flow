@@ -102,28 +102,50 @@ def render_two_views(mesh, folder, focus=None, symmetry=None, log=print):
     return views
 
 
-def _labels(ax, coord):
+TALL_MAX = (3.0, 5.0)     # plot area limits (width, height) in inches for tall domains
+WIDE_MAX = (5.0, 3.0)     # ... and for wide domains
+MIN_FILL = 0.35           # keep the true aspect only if the short side fills this much of its limit
+
+
+def _labels(ax, coord, equal=True):
     xn, yn = figures.coord_names(coord)
     ax.set_xlabel(f"${xn}$")
     ax.set_ylabel(f"${yn}$")
     ax.tick_params(axis="x", pad=10)
-    ax.set_aspect("equal")
+    ax.set_aspect("equal" if equal else "auto")
     figures.arrow_axes(ax)
 
 
-def _figsize(w_data, h_data, width=7.0, max_h=7.0):
-    a = h_data / max(w_data, 1e-300)
-    w, h = width, width * a
-    if h > max_h:
-        h, w = max_h, max_h / a
-    return w, max(h, 0.6)
+def _figsize(w_data, h_data):
+    """Plot-area size (w, h, equal) in inches, at most 3 x 5 (tall) or 5 x 3 (wide).
+
+    The true aspect ratio is kept when the domain is not too slender; a slender
+    domain (a pore, a thin slit) instead fills the whole 3 x 5 box with each axis on
+    its own scale, and the tick labels give the real values (equal = False)."""
+    w_data, h_data = max(w_data, 1e-300), max(h_data, 1e-300)
+    wmax, hmax = TALL_MAX if h_data >= w_data else WIDE_MAX
+    s = min(wmax / w_data, hmax / h_data)
+    w, h = w_data * s, h_data * s
+    if min(w / wmax, h / hmax) < MIN_FILL:
+        return wmax, hmax, False
+    return w, h, True
+
+
+def _scale_note(ax, equal, x_span, y_span, w, h):
+    """Tell the reader when the axes are not drawn to the same scale."""
+    if equal:
+        return
+    k = (y_span / h) / (x_span / w)
+    ax.annotate(figures.tex(f"axes not to scale (vertical $\\div${k:.3g})") if k >= 1
+                else figures.tex(f"axes not to scale (horizontal $\\div${1 / k:.3g})"),
+                xy=(0, 0), xycoords="axes fraction", xytext=(0, -78), textcoords="offset points",
+                fontsize=14, ha="left", va="top")
 
 
 def _view_a(mesh, out, focus, coord):
     X = mesh.X
     x0, x1, y0, y1 = X[:, 0].min(), X[:, 0].max(), X[:, 1].min(), X[:, 1].max()
-    w, h = _figsize(x1 - x0, y1 - y0,
-                    width=10.0 if (y1 - y0) < 0.25 * (x1 - x0) else 7.0)
+    w, h, equal = _figsize(x1 - x0, y1 - y0)
     fig = plt.figure(figsize=(w + 3.2, h + 1.6))
     ax = fig.add_axes([0.9 / (w + 3.2), 1.0 / (h + 1.6), w / (w + 3.2), h / (h + 1.6)])
     t = mesh.tri
@@ -140,10 +162,11 @@ def _view_a(mesh, out, focus, coord):
         handles.append(Line2D([], [], color=colors[k], lw=3.0, label=label))
     _unnamed_overlay(ax, mesh, handles)
     pad = 0.02 * max(x1 - x0, y1 - y0)
-    ax.set_xlim(x0 - pad, x1 + pad)
-    ax.set_ylim(y0 - pad, y1 + pad)
-    _labels(ax, coord)
-    ax.set_title(f"Mesh, {mesh.n_elements} P2 triangles", pad=20)
+    ax.set_xlim(x0 - (pad if equal else 0.02 * (x1 - x0)), x1 + (pad if equal else 0.02 * (x1 - x0)))
+    ax.set_ylim(y0 - (pad if equal else 0.02 * (y1 - y0)), y1 + (pad if equal else 0.02 * (y1 - y0)))
+    _labels(ax, coord, equal)
+    ax.set_title(f"Mesh, {mesh.n_elements} P2 triangles", pad=20, loc="left")
+    _scale_note(ax, equal, (x1 - x0) * 1.04, (y1 - y0) * 1.04, w, h)
     ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5),
               frameon=False, fontsize=20, handlelength=1.5)
     figures.save_to(fig, os.path.join(out, "view_a.png"))
@@ -213,7 +236,7 @@ def _view_b(mesh, out, focus, coord):
     inside = ((X[:, 0] >= box[0]) & (X[:, 0] <= box[1])
               & (X[:, 1] >= box[2]) & (X[:, 1] <= box[3]))
     sel = inside[mesh.tri].any(axis=1)
-    w, h = _figsize(box[1] - box[0], box[3] - box[2], width=6.5)
+    w, h, equal = _figsize(box[1] - box[0], box[3] - box[2])
     W = w + 2.65                               # room for the x arrow before the colour bar
     fig = plt.figure(figsize=(W, h + 1.6))
     ax = fig.add_axes([0.9 / W, 1.0 / (h + 1.6), w / W, h / (h + 1.6)])
@@ -229,9 +252,10 @@ def _view_b(mesh, out, focus, coord):
                                              colors=[colors[k]], linewidths=3.0))
     ax.set_xlim(box[0], box[1])
     ax.set_ylim(box[2], box[3])
-    _labels(ax, coord)
+    _labels(ax, coord, equal)
+    _scale_note(ax, equal, box[1] - box[0], box[3] - box[2], w, h)
     qmin = float(q[sel].min()) if sel.any() else float("nan")
-    ax.set_title(figures.tex(f"Finest region, $q_{{\\min}} = {qmin:.2f}$"), pad=20)
+    ax.set_title(figures.tex(f"Finest region, $q_{{\\min}} = {qmin:.2f}$"), pad=20, loc="left")
     cax = fig.add_axes([(0.9 + w + 0.5) / W, 1.0 / (h + 1.6), 0.22 / W, h / (h + 1.6)])
     figures.colorbar(fig, pc, cax, "$q$")
     figures.save_to(fig, os.path.join(out, "view_b.png"))

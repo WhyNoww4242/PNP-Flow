@@ -32,6 +32,7 @@ Goals:
 | Current dashboard (`hud/`) | stdlib server + vanilla JS/WebGL + Plotly | working; visual reference for the app |
 | Desktop app (`app/`) | **Rust + Tauri 2**, web front end | first version runs in a browser (`python app/server.py`, port 8766); Tauri shell written, not compiled |
 | MCP server (`pnpflow/mcp`) | Python `mcp` SDK | specified (`docs/MCP.md`), not started |
+| Time stepping (`pnpflow/transient.py`) | Python + JAX | variable-step BDF2, checked (order 2.1, `tools/check_transient.py`) |
 | Project file + generic case | JSON | not started — next step |
 
 ## 2. Physics (nondimensional, steady)
@@ -68,7 +69,13 @@ Details, discretisation and BC table: `docs/THEORY.md`.
 6. **Analysis** (`analysis.py`): reaction-method boundary fluxes, induced wall charge, forces,
    recovered gradients (`E`, vorticity, `N_i`, current), line/wall profiles, and **adjoint
    sensitivities** `dQ/dp` (one extra solve per quantity; `dR/dp` via `jax.jvp`).
-7. **Output** (`output.py`, `runner.py`): `results/<run>/` with `progress.json` (live),
+7. **Time-dependent runs** (`transient.py`): `M dU/dt + R(U) = 0`, where `M` is the species mass
+   matrix (from `jacfwd` of the element mass term; phi, u, p have none, so it is an index-1
+   DAE). Variable-step BDF2 (first step backward Euler) wraps the steady assembler, so
+   `Newton` is reused. A case asks for it with `Setup.transient` (t_end, output times,
+   profile/figure callbacks); `runner._run_transient` writes profiles at each output time,
+   `summary.transient`, `solution.npz` (`t`, `U_t`) and live `progress.time`.
+8. **Output** (`output.py`, `runner.py`): `results/<run>/` with `progress.json` (live),
    `summary.json`, `fields.json`, `profiles.json`, `plots/*.png`, `solution.{vtu,msh,npz}`.
 
 ### Boundary conditions (`bc.py`)
@@ -87,24 +94,28 @@ Values are numbers, parameter names (strings) or JAX functions `f(x, params)`.
 | `gouy_chapman` | planar EDL, optional Stern layer | exact GC: max err ~3e-6 |
 | `eo_slit` | electro-osmotic slit flow | nonlinear PB: rel. err ~2e-4 |
 | `mms` | manufactured solution, all terms + BC types | max err ~2e-4 |
+| `charged_sphere` | axisymmetric Poisson | exact potential, Gauss |
+| `pore_charging` | **time-dependent** pore charging from an SDL reservoir (axisym, paper DNS) | equilibrium vs cylinder PB at Z = 0.5; BDF2 vs exact decay |
 
 `bash tools/validate.sh` runs the validation cases (all pass as of 2026-11-15).
 
 ## 4. Running
 
 ```bash
-# New machines: one conda env for Windows (inside WSL), Linux and macOS
+# One conda env for Linux and macOS
 conda env create -f environment.yml && conda activate pnpflow
 python run.py --list
 python run.py cylinder --name demo --set delta=0.05
 python hud/server.py                       # current dashboard at http://localhost:8765
-
-# This machine (existing venv, Windows host → WSL Debian)
-wsl -d Debian -- bash tools/wsl_run.sh python run.py --list
+python app/server.py                       # app at http://localhost:8766 (Study tab: Device = Auto/GPU/CPU)
+python tools/check_transient.py            # time-stepper check (BDF2 order 2)
 ```
+Device: the server sets `JAX_PLATFORMS` per run (`/api/launch` `device: auto|cpu|gpu`,
+`/api/devices` probes the GPU). JAX assembly runs on the GPU; the sparse solve (PARDISO) stays on
+the CPU. From the shell: `JAX_PLATFORMS=cuda python run.py ...`.
 `run.py --list` prints every case with default params + help text as JSON.
 `environment.yml`: gmsh from conda-forge (no system libGLU); `pypardiso` only on x86_64
-(Apple Silicon uses SuperLU); GPU via `pip install -U "jax[cuda12]"` on Linux.
+(Apple Silicon uses SuperLU); Linux installs `jax[cuda13]` (GPU) automatically.
 
 ## 5. Repository map
 
@@ -121,6 +132,12 @@ pnpflow/analysis.py  fluxes, forces, profiles, adjoint sensitivities
 pnpflow/cases.py     case library (@case)
 pnpflow/mms.py       manufactured solution helpers
 pnpflow/output.py    JSON/VTU/PNG writers, Progress
+pnpflow/transient.py BDF2 time stepping (TransientAssembler, integrate)
+pnpflow/pore.py      pore_charging case (axisym pore + SDL, paper DNS)
+pnpflow/figures_pore.py  pore figures (Fig. 3 layout, evolution, charging, time steps)
+tools/check_transient.py  BDF2 exact-solution check
+pnpflow/export.py    CSV export of profiles (results/<run>/csv/); tools/export_csv.py re-exports old runs
+docs/pore_answers.md the user's answers for the pore DNS
 pnpflow/runner.py    end-to-end run → results/<name>/
 hud/                 current web dashboard (visual reference for the app)
 docs/THEORY.md       equations, discretisation, BCs
@@ -154,6 +171,30 @@ results/             run outputs (not source)
 | look | HUD colours and type, left menu with SVG icons + shortcut tooltips, standard menu bar (File, Edit, View…), dark default / follows OS, balanced density |
 | layout reference | FreeCAD 1.1 (user's modified dark theme, `docs/Screenshot 2026-11-21 233015.png`): workbench tabs = construction steps, combo panel (tree + properties), Start page with templates / recent / examples, document tabs, status bar. Mapping and changes: `docs/PLAN.md` §1 |
 
+### Pore-charging DNS decisions (from `docs/pore_answers.md`)
+
+| topic | decision |
+|---|---|
+| equations | paper Eq. (4): rho, S, Phi, tau = D t / l_p^2, R = r/a_p, Z = z/l_p; solver uses lengths / a_p, t~ = D t / a_p^2, so tau = t~ / L^2 |
+| mu | mu = rho + 2 Phi; axial lines are cross-section averages (weight r dr) |
+| BCs | pore wall phi = Phi_w (step, no Stern), blocking; pore end blocking (phi = Phi_w by default, `end_charged`); SDL walls uncharged, no flux; SDL far end c = c0, phi = 0 |
+| SDL | radius 2 max α, length l_p/2 + 1.5 max α (extra for meshing); Biot number not used |
+| values | ε = 7.1e-10 F/m, D = 1.34e-9 m²/s, c0 = 0.94 mM (λ_D = 10.0 nm), a_p = 10 nm, l_p = 1 µm |
+| times | early τ = 0.13; intermediate `tau_mid` (default 0.5); profiles saved at every τ in `pore.TAU_OUT` |
+| runs | launched from the app server with a GPU/CPU choice |
+
+### Pore DNS comparison runs (from `docs/pore_dns_answers.md`, plan `docs/pore_dns_plan.md`)
+
+| topic | decision |
+|---|---|
+| cases | narrow (1→1), converging (2→1), diverging (1→2), wide (2→2) = DNS folders 100_100, 200_100, 100_200, 200_200 |
+| length | **L = 10 µm** (DNS files + pawel.py), a_ref = 10 nm |
+| values | c0 = 0.948 mM, ε = 7.0832e-10 F/m, D = 1.337e-9 m²/s, T = 298.15 K, Φ_w = 10 mV; CODATA constants kept |
+| times | DNS folder times t = 0.005 k s, k = 0..15 (τ = 0.06685 k), τ_end = 1.01 |
+| start | DNS initial state via new `dns_init` option; default unchanged |
+| mesh | dry run + diagnose first; slightly coarser h_wall allowed only if a mesh does not fit in RAM |
+| output | figureDNS4 layout (centreline μ, Φ at Z = 0.5, DNS squares) + combined CSV |
+
 The build plan, in phases with a check for each: `docs/PLAN.md`.
 
 Design rules come from impeccable (project skill in `.claude/skills/impeccable`; use
@@ -171,6 +212,11 @@ Tauri front end. Tokens and components: `DESIGN.md`.
 - **Geometry is built in gmsh** (OCC kernel): build shapes, `fragment` multi-region models,
   name every boundary curve and region with physical groups, size the mesh from the Debye
   length (`h_wall ≤ λ_D/8` within `3 λ_D` of charged/reacting walls), generate P2.
+- **Entrances need extra mesh.** Where a charged pore wall meets an uncharged reservoir
+  face (pore mouths, re-entrant corners) refine beyond `λ_D/8`: the corner is singular and
+  the access region carries the entrance resistance. `geometry.pore_axisym` uses
+  `h_entr = h_wall/2` at the corner and `h_wall` within 1.5 max(α) of the mouth; leave
+  extra reservoir length (here `+1.5 max α`) so the refined region fits.
 - **Always render the mesh from two views** (whole domain by boundary group; zoom on the finest
   region by quality; two camera angles in 3D) and look at both.
 - **Always run `mesh_diagnose`** (unnamed boundaries, BC coverage, EDL resolution, quality,
@@ -183,7 +229,8 @@ Tauri front end. Tokens and components: `DESIGN.md`.
 1. Project file + generic case (needed by the GUI and MCP for everything below).
 2. Applied potential / current (potentiostat, galvanostat) and **Butler–Volmer** kinetics
    (with Frumkin correction) as new `edge_residual` terms.
-3. Time-dependent: chronoamperometry, CV (mass matrix + BDF/implicit time stepping).
+3. Time-dependent: chronoamperometry, CV. *BDF2 time stepping done (2026-11-22, used by
+   `pore_charging`); still to do: time-varying BCs (CV sweeps), current output vs time.*
 4. **EIS** by small-signal linearisation: `(iω M + J) δU = −(∂R/∂p) δp`, reusing the JAX
    Jacobian.
 5. Homogeneous reactions (reaction network → sources).
@@ -191,7 +238,8 @@ Tauri front end. Tokens and components: `DESIGN.md`.
 7. Porous electrodes.
 8. 3D.
 
-Known limits today: steady only, 2D planar only, dimensionless input only, and the electric
+Known limits today: time-dependent BCs not yet supported (steps only), 2D (planar or
+axisymmetric, no flow in axisym), dimensionless input except in `pore_charging`, and the electric
 force on bodies neglects Maxwell stress on the outer boundary.
 
 ## 9. Figure house style
@@ -246,5 +294,5 @@ def apply_custom_style(num_colors: int = 4, cmap: str = "cmr.cosmic_r", cmap_ran
 - Meshes: follow `docs/MCP.md` §2–5 (gmsh, named groups, two-view render, diagnose).
 - UI work: read `PRODUCT.md` and `DESIGN.md` first; use the impeccable skill.
 - Plots: §9. numpy (not jnp) in plotting code.
-- Run solver code in WSL via `tools/wsl_run.sh` on this machine (`JAX_PLATFORMS=cpu` default).
+- Run solver code inside the `pnpflow` conda env (set `JAX_PLATFORMS=cpu` to force CPU).
 - Do not commit `results/` contents or `__pycache__/`.
