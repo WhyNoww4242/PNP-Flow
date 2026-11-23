@@ -304,6 +304,7 @@ export class LaunchView {
     if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(name)) {
       return this.message("error", "Run name: letters, digits, '_', '.', '-' only.");
     }
+    if (!this.state.case || !this.cases[this.state.case]) return this.message("error", "No case selected: the case list did not load.");
     this.message("info", "Launching…");
     try {
       const r = await api.launch({ case: this.state.case, name, params, overwrite: this.overwrite.checked });

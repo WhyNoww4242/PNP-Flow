@@ -3,6 +3,9 @@
 Mesh size is controlled with a distance field:
   h = h_wall inside `layer` of the walls, growing to h_far at `grow`.
 """
+import contextlib
+import os
+
 import numpy as np
 import gmsh
 
@@ -31,13 +34,208 @@ def _wall_size_field(curves, h_wall, h_far, layer, grow, extra=None):
 
 
 def _finish(save=None):
+    ctx = MESH_CTX
+    if ctx["load"] and os.path.isfile(ctx["load"]):
+        # reuse a mesh built earlier for the same case (same mesh key)
+        gmsh.clear()
+        gmsh.open(ctx["load"])
+        ctx["info"]["loaded"] = ctx["load"]
+        return mesh_from_gmsh()
+    if ctx["opts"]:
+        apply_mesh_options(ctx["opts"], ctx["info"])
     gmsh.option.setNumber("Mesh.Algorithm", 6)        # Frontal-Delaunay
     gmsh.model.mesh.generate(2)
     gmsh.model.mesh.setOrder(2)                        # curved P2 elements
     gmsh.model.mesh.optimize("HighOrder")
-    if save:
-        gmsh.write(save)
+    for path in (save, ctx["save"]):
+        if path:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            gmsh.option.setNumber("Mesh.SaveAll", 1)   # every element, groups kept
+            gmsh.write(path)
+            ctx["info"]["saved"] = path
     return mesh_from_gmsh()
+
+
+# ---------------------------------------------------------------------------
+# Case mesh options: density, boundary / region refinement, sharp corners, paint
+# ---------------------------------------------------------------------------
+MESH_CTX = {"opts": None, "load": None, "save": None, "info": {}}
+
+
+@contextlib.contextmanager
+def mesh_options(opts=None, load=None, save=None):
+    """Apply a case's mesh block to every gmsh builder called inside the block.
+
+    load : path of a saved mesh to read instead of meshing (the builder still draws
+           its geometry, which is cheap; only the meshing is skipped)
+    save : path to write the generated mesh to (msh4, named physical groups)
+    Yields an info dict: corners found, fields added, density, loaded / saved path.
+    """
+    old = dict(MESH_CTX)
+    info = {}
+    MESH_CTX.update(opts=opts, load=load, save=save, info=info)
+    try:
+        yield info
+    finally:
+        MESH_CTX.clear()
+        MESH_CTX.update(old)
+
+
+def _ramp(in_field, size, dist_min, growth):
+    """Size `size` up to distance dist_min of in_field, then growing linearly with
+    slope (growth - 1) so neighbouring elements differ by about `growth`; no
+    influence once it exceeds 1000 size (StopAtDistMax)."""
+    f = gmsh.model.mesh.field
+    g = max(1.01, float(growth or 1.2))
+    size = float(size)
+    size_max = 1000.0 * size
+    t = f.add("Threshold")
+    f.setNumber(t, "InField", in_field)
+    f.setNumber(t, "SizeMin", size)
+    f.setNumber(t, "SizeMax", size_max)
+    f.setNumber(t, "DistMin", max(0.0, float(dist_min)))
+    f.setNumber(t, "DistMax", max(0.0, float(dist_min)) + (size_max - size) / (g - 1.0))
+    f.setNumber(t, "StopAtDistMax", 1)
+    return t
+
+
+def _n(v):
+    """A number for a gmsh MathEval expression: always parenthesised (no '--')."""
+    v = float(v)
+    if not np.isfinite(v):
+        raise ValueError("mesh options: coordinates must be finite numbers")
+    return f"({v!r})"
+
+
+def _curves_of_group(name):
+    tags = []
+    for dim, tag in gmsh.model.getPhysicalGroups(1):
+        if gmsh.model.getPhysicalName(dim, tag) == name:
+            tags += [int(c) for c in gmsh.model.getEntitiesForPhysicalGroup(dim, tag)]
+    return tags
+
+
+def _model_bbox():
+    xs, ys = [], []
+    for _, s in gmsh.model.getEntities(2):
+        b = gmsh.model.getBoundingBox(2, s)
+        xs += [b[0], b[3]]
+        ys += [b[1], b[4]]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def sharp_corners(max_angle=80.0, reentrant=185.0):
+    """Geometry corners where two boundary curves meet at an interior angle below
+    `max_angle` (acute) or above `reentrant` (re-entrant, singular): [(tag, x, y, angle)]."""
+    x0, x1, y0, y1 = _model_bbox()
+    eps = 1e-4 * max(x1 - x0, y1 - y0)
+    surfaces = [s for _, s in gmsh.model.getEntities(2)]
+    out = []
+    for _, p in gmsh.model.getEntities(0):
+        P = np.array(gmsh.model.getValue(0, p, []))[:2]
+        up, _ = gmsh.model.getAdjacencies(0, p)
+        bnd = [int(c) for c in up if len(gmsh.model.getAdjacencies(1, int(c))[0]) == 1]
+        if len(bnd) != 2:
+            continue
+        dirs = []
+        for c in bnd:
+            lo, hi = gmsh.model.getParametrizationBounds(1, c)
+            u0, u1 = float(lo[0]), float(hi[0])
+            a = np.array(gmsh.model.getValue(1, c, [u0]))[:2]
+            b = np.array(gmsh.model.getValue(1, c, [u1]))[:2]
+            at_start = np.linalg.norm(a - P) <= np.linalg.norm(b - P)
+            d = np.array(gmsh.model.getDerivative(1, c, [u0 if at_start else u1]))[:2]
+            d = d if at_start else -d                  # pointing away from the corner
+            n = np.linalg.norm(d)
+            if n == 0:
+                break
+            dirs.append(d / n)
+        if len(dirs) != 2:
+            continue
+        ang = float(np.degrees(np.arccos(np.clip(dirs[0] @ dirs[1], -1, 1))))
+        if ang > 179.0:                                # straight continuation
+            continue
+        bis = dirs[0] + dirs[1]
+        bis = bis / np.linalg.norm(bis)
+        q = P + eps * bis
+        inside = any(gmsh.model.isInside(2, s, [q[0], q[1], 0.0]) for s in surfaces)
+        interior = ang if inside else 360.0 - ang
+        if interior < max_angle or interior > reentrant:
+            out.append((int(p), float(P[0]), float(P[1]), interior))
+    return out
+
+
+def apply_mesh_options(opts, info):
+    """Add the case's refinement fields to the builder's background field."""
+    f = gmsh.model.mesh.field
+    density = float(opts.get("density") or 1.0)
+    if density <= 0:
+        raise ValueError("mesh density must be > 0")
+    gmsh.option.setNumber("Mesh.MeshSizeFactor", 1.0 / density)
+    info["density"] = density
+    added = []
+    for b in opts.get("boundaries") or []:
+        curves = _curves_of_group(b.get("boundary"))
+        if not curves:
+            raise ValueError(f"mesh refinement: no boundary named '{b.get('boundary')}'")
+        if not float(b.get("size") or 0) > 0:
+            raise ValueError(f"mesh refinement on '{b.get('boundary')}': size must be > 0")
+        d = f.add("Distance")
+        f.setNumbers(d, "CurvesList", curves)
+        f.setNumber(d, "Sampling", 600)
+        added.append(_ramp(d, b["size"], b.get("layer") or 0.0, b.get("growth")))
+    for r in opts.get("regions") or []:
+        if not float(r.get("size") or 0) > 0:
+            raise ValueError("mesh region: size must be > 0")
+        m = f.add("MathEval")
+        if r.get("kind") == "box":
+            xa, xb = sorted((float(r["x0"]), float(r["x1"])))
+            ya, yb = sorted((float(r["y0"]), float(r["y1"])))
+            f.setString(m, "F", f"Sqrt(Max(Max({_n(xa)}-x,x-{_n(xb)}),0)^2+Max(Max({_n(ya)}-y,y-{_n(yb)}),0)^2)")
+            added.append(_ramp(m, r["size"], 0.0, r.get("growth")))
+        else:
+            f.setString(m, "F", f"Sqrt((x-{_n(r['x'])})^2+(y-{_n(r['y'])})^2)")
+            added.append(_ramp(m, r["size"], float(r.get("r") or 0.0), r.get("growth")))
+    corners = opts.get("corners") or {}
+    if corners.get("enabled"):
+        found = sharp_corners(float(corners.get("max_angle") or 80.0))
+        x0, x1, y0, y1 = _model_bbox()
+        radius = float(corners.get("radius") or 0) or 0.02 * np.hypot(x1 - x0, y1 - y0)
+        size = float(corners.get("size") or 0) or radius / 8
+        info["corners"] = [{"x": x, "y": y, "angle": a} for _, x, y, a in found]
+        if found:
+            d = f.add("Distance")
+            f.setNumbers(d, "PointsList", [t for t, *_ in found])
+            added.append(_ramp(d, size, radius, 1.2))
+        info["corner_size"], info["corner_radius"] = size, radius
+    paint = opts.get("paint") or []
+    if paint:
+        by_size = {}
+        for s in paint:
+            by_size.setdefault(float(s["size"]), []).append(s)
+        for size, spots in by_size.items():
+            if not size > 0:
+                raise ValueError("paint spots need a size > 0")
+            terms = [f"Sqrt((x-{_n(s['x'])})^2+(y-{_n(s['y'])})^2)-{_n(s.get('r') or 0)}"
+                     for s in spots]
+            expr = terms[0]
+            for t in terms[1:]:
+                expr = f"Min({expr},{t})"
+            m = f.add("MathEval")
+            f.setString(m, "F", f"Max({expr},0)")
+            added.append(_ramp(m, size, 0.0, opts.get("paint_growth") or 1.2))
+        info["paint_spots"] = len(paint)
+    if added:
+        # combine with the builder's own background field (the Min not used by another Min)
+        mins = [t for t in f.list() if f.getType(t) == "Min" and t not in added]
+        used = set()
+        for t in mins:
+            used.update(int(x) for x in f.getNumbers(t, "FieldsList"))
+        base = [t for t in mins if t not in used]
+        top = f.add("Min")
+        f.setNumbers(top, "FieldsList", added + base[-1:])
+        f.setAsBackgroundMesh(top)
+    info["fields_added"] = len(added)
 
 
 def _name(dim, tags, name):

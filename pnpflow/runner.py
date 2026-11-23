@@ -2,20 +2,22 @@
 import datetime
 import json
 import os
+import shutil
 import time
 import traceback
 
 import jax.numpy as jnp
 import numpy as np
 
-from . import output
+from . import geometry, output, project
 from .analysis import Analysis
 from .cases import CASES
 from .solver import Assembler, Newton, continuation
 
 
 def run_case(name, overrides=None, run_name=None, root="results", plots=True,
-             log=print):
+             log=print, ctx=None, folder=None):
+    """ctx (from run_from_case): the case dict, its folder and mesh load/save paths."""
     spec = CASES[name]
     params = dict(spec["params"])
     for k, v in (overrides or {}).items():
@@ -23,21 +25,35 @@ def run_case(name, overrides=None, run_name=None, root="results", plots=True,
             raise KeyError(f"unknown parameter '{k}' for case '{name}'")
         params[k] = float(v)
     run_name = run_name or f"{name}_{datetime.datetime.now():%Y%m%d_%H%M%S}"
-    folder = os.path.join(root, run_name)
+    folder = folder or os.path.join(root, run_name)
     os.makedirs(folder, exist_ok=True)
     progress = output.Progress(folder)
     t_start = time.time()
     post = {}                     # mesh views / checks, kept if the solve fails
     try:
-        summary = _run(spec, name, params, run_name, folder, progress, plots, log, post)
+        summary = _run(spec, name, params, run_name, folder, progress, plots, log, post,
+                       ctx=ctx)
     except Exception as exc:
         progress.set(state="failed", message=f"{type(exc).__name__}: {exc}")
-        output.write_json(os.path.join(folder, "summary.json"), {
-            "run_name": run_name, "case": name, "input": params,
-            "error": traceback.format_exc(), "solver": {"converged": False}, **post})
+        failed = {"run_name": run_name, "case": name, "input": params,
+                  "error": traceback.format_exc(), "solver": {"converged": False}, **post}
+        if ctx:
+            failed["project"] = ctx["case"].get("name")
+        output.write_json(os.path.join(folder, "summary.json"), failed)
+        try:
+            project.write_convergence(folder, failed, progress.data)
+        except Exception:
+            pass
         raise
     summary["solver"]["wall_time_s"] = time.time() - t_start
+    if ctx:
+        summary["project"] = ctx["case"].get("name")
     output.write_json(os.path.join(folder, "summary.json"), summary)
+    try:
+        project.write_convergence(folder, summary, progress.data)
+        log("convergence.txt written")
+    except Exception as exc:                        # never fail a run on the report
+        log(f"  convergence.txt failed: {type(exc).__name__}: {exc}")
     try:
         from .export import export_csv
         n = len(export_csv(folder))
@@ -57,22 +73,32 @@ def _device_info():
         return {"platform": "unknown", "error": str(exc)}
 
 
-def _run(spec, name, params, run_name, folder, progress, plots, log, post):
+def _run(spec, name, params, run_name, folder, progress, plots, log, post, ctx=None):
     # ---- build ----------------------------------------------------------
     t0 = time.time()
     post["device"] = _device_info()
     progress.set(device=post["device"])
     log(f"jax device: {post['device'].get('platform')} "
         f"({', '.join(post['device'].get('devices', []))})")
-    setup = spec["build"](params)
+    if ctx:
+        with geometry.mesh_options(ctx["case"]["mesh"], load=ctx.get("mesh_load"),
+                                   save=ctx.get("mesh_save")) as minfo:
+            setup = spec["build"](params)
+        log("mesh: reused the case mesh" if minfo.get("loaded") else
+            "mesh: built with the case's mesh options (saved to the case)")
+    else:
+        setup = spec["build"](params)
+        minfo = {}
     model = setup.model
     mesh_stats = model.mesh.stats()
     log(f"mesh: {mesh_stats['n_elements']} triangles, {model.ndof} dofs "
         f"({time.time() - t0:.1f}s)")
     pp_checks = _mesh_postprocess(model, setup, folder, post, log)
+    if ctx:
+        _store_case_mesh(ctx, model, folder, minfo, log)
     if setup.transient:
         return _run_transient(spec, name, params, run_name, folder, progress, plots,
-                              log, post, setup, mesh_stats, pp_checks)
+                              log, post, setup, mesh_stats, pp_checks, ctx=ctx)
 
     # ---- solve ----------------------------------------------------------
     progress.set(state="assembling", message="compiling jax kernels",
@@ -163,7 +189,7 @@ def _run(spec, name, params, run_name, folder, progress, plots, log, post):
 
 
 def _run_transient(spec, name, params, run_name, folder, progress, plots, log, post,
-                   setup, mesh_stats, pp_checks):
+                   setup, mesh_stats, pp_checks, ctx=None):
     """Time-dependent run (setup.transient): adaptive BDF2, profiles at output
     times, then (optionally) the steady equilibrium for the setup's checks."""
     from .transient import TransientAssembler, integrate
@@ -204,10 +230,20 @@ def _run_transient(spec, name, params, run_name, folder, progress, plots, log, p
     U0_given = tr.get("U0")
     U0 = model.initial_guess(prm) if U0_given is None else jnp.asarray(U0_given)
     progress.set(state="solving", message="time stepping", fraction=0.0, health="converging")
+    outputs, dt_max, max_rejects = list(tr.get("outputs", ())), tr.get("dt_max"), 12
+    if ctx:
+        tm = ctx["case"]["time"]
+        taus = project.save_times(tm.get("save"), t_end / t_per)
+        if taus is not None:
+            outputs = sorted({t * t_per for t in taus} | set(tr.get("required_outputs", ())))
+            log(f"saved times: {len(outputs)} ({tm['save'].get('mode')} mode)")
+        if tm.get("dt_max"):
+            dt_max = float(tm["dt_max"]) * t_per
+        max_rejects = int(tm.get("max_rejects") or 12)
     U, t, steps, ok = integrate(
-        newton, tasm, U0, prm, t_end, outputs=tr.get("outputs", ()),
+        newton, tasm, U0, prm, t_end, outputs=outputs, max_rejects=max_rejects,
         consistent_init=U0_given is None,
-        dt0=tr.get("dt0", 1e-2), dt_max=tr.get("dt_max"), rtol=tr.get("rtol", 1e-3),
+        dt0=tr.get("dt0", 1e-2), dt_max=dt_max, rtol=tr.get("rtol", 1e-3),
         on_output=lambda tt, UU: snapshots.append((float(tt), np.asarray(UU))),
         on_step=on_step, log=log)
     solve_time = time.time() - t1
@@ -411,6 +447,135 @@ def _strip(profiles):
     return profiles
 
 
+# ---------------------------------------------------------------------------
+# Cases: cases/<case>/case.json + mesh/, runs in cases/<case>/results/<run>/
+# ---------------------------------------------------------------------------
+def _case_params(case, log=print):
+    template = case.get("template")
+    if template not in CASES:
+        raise KeyError(f"case template '{template}' is not a known template")
+    spec = CASES[template]
+    params = dict(spec["params"])
+    for k, v in (case.get("params") or {}).items():
+        if k in params:
+            params[k] = float(v)
+        else:
+            log(f"  case parameter '{k}' is not used by template '{template}' (ignored)")
+    return template, spec, params
+
+
+def _mesh_status(case_dir):
+    try:
+        with open(os.path.join(case_dir, "mesh", "status.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_mesh_status(case_dir, data):
+    os.makedirs(os.path.join(case_dir, "mesh"), exist_ok=True)
+    output.write_json(os.path.join(case_dir, "mesh", "status.json"), data)
+
+
+def _mesh_json(mesh, info, symmetry):
+    """Mesh outline for the app's mesh tools (nodes, triangles, named boundaries)."""
+    data = output.fields_json(mesh, {})
+    data["symmetry"] = symmetry
+    data["corners"] = info.get("corners", [])
+    return data
+
+
+def _store_case_mesh(ctx, model, folder, info, log):
+    """After a run built (or reused) its mesh: keep the case's mesh/ up to date and
+    put a copy of case.msh into the run's mesh/ folder."""
+    case_dir = ctx["case_dir"]
+    mdir = os.path.join(case_dir, "mesh")
+    os.makedirs(mdir, exist_ok=True)
+    final = os.path.join(mdir, "case.msh")
+    if info.get("saved"):
+        os.replace(info["saved"], final)
+        for f in ("view_a.png", "view_b.png"):
+            src = os.path.join(folder, "mesh", f)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(mdir, f))
+        src = os.path.join(folder, "mesh", "diagnose.json")
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(mdir, "validation.json"))
+        output.write_json(os.path.join(mdir, "mesh.json"),
+                          _mesh_json(model.mesh, info, getattr(model, "coord", "planar")))
+        _write_mesh_status(case_dir, {
+            "state": "done", "key": ctx["key"], "finished": datetime.datetime.now().isoformat(timespec="seconds"),
+            "stats": model.mesh.stats(), "n_dofs": int(model.ndof), "info": info, "by_run": os.path.basename(folder)})
+    if os.path.isfile(final):
+        shutil.copy2(final, os.path.join(folder, "mesh", "case.msh"))
+
+
+def build_case_mesh(case_dir, log=print):
+    """Mesh a case without solving: case.msh, the two views, validation.json,
+    mesh.json and status.json in cases/<case>/mesh/."""
+    case = project.load(case_dir)
+    template, spec, params = _case_params(case, log)
+    key = project.mesh_key(case)
+    mdir = os.path.join(case_dir, "mesh")
+    os.makedirs(mdir, exist_ok=True)
+    started = datetime.datetime.now().isoformat(timespec="seconds")
+    _write_mesh_status(case_dir, {"state": "building", "key": key, "started": started})
+    t0 = time.time()
+    try:
+        tmp = os.path.join(mdir, "case.new.msh")
+        with geometry.mesh_options(case["mesh"], save=tmp) as info:
+            setup = spec["build"](params)
+        model = setup.model
+        log(f"mesh: {model.mesh.stats()['n_elements']} triangles, {model.ndof} dofs "
+            f"({time.time() - t0:.1f}s)")
+        post = {}
+        checks = _mesh_postprocess(model, setup, case_dir, post, log)
+        os.replace(tmp, os.path.join(mdir, "case.msh"))
+        diag = os.path.join(mdir, "diagnose.json")
+        if os.path.isfile(diag):
+            os.replace(diag, os.path.join(mdir, "validation.json"))
+        output.write_json(os.path.join(mdir, "mesh.json"),
+                          _mesh_json(model.mesh, info, getattr(model, "coord", "planar")))
+        status = {"state": "done", "key": key, "started": started,
+                  "finished": datetime.datetime.now().isoformat(timespec="seconds"),
+                  "time_s": time.time() - t0, "stats": model.mesh.stats(),
+                  "n_dofs": int(model.ndof), "info": info,
+                  "views": post.get("mesh_views", []), "summary_check": checks[0] if checks else None}
+        _write_mesh_status(case_dir, status)
+        return status
+    except Exception as exc:
+        _write_mesh_status(case_dir, {"state": "failed", "key": key, "started": started,
+                                      "error": f"{type(exc).__name__}: {exc}",
+                                      "trace": traceback.format_exc()})
+        raise
+
+
+def run_from_case(case_dir, run_name=None, plots=True, log=print):
+    """Run a case: results go to cases/<case>/results/<run>/ with a frozen case.json.
+    The case mesh is reused when it was built for the same mesh key, else rebuilt
+    (and stored back in the case)."""
+    case_dir = os.path.abspath(case_dir)
+    case = project.load(case_dir)
+    template, spec, params = _case_params(case, log)
+    cname = case.get("name") or os.path.basename(case_dir)
+    run_name = run_name or f"{cname}_{datetime.datetime.now():%y%m%d_%H%M%S}"
+    folder = os.path.join(case_dir, "results", run_name)
+    os.makedirs(os.path.join(folder, "mesh"), exist_ok=True)
+    output.write_json(os.path.join(folder, "case.json"), case)
+    key = project.mesh_key(case)
+    st = _mesh_status(case_dir)
+    msh = os.path.join(case_dir, "mesh", "case.msh")
+    reuse = st.get("state") == "done" and st.get("key") == key and os.path.isfile(msh)
+    log(f"case {cname}: template {template}, mesh "
+        + ("reused (unchanged since it was built)" if reuse else "will be built"))
+    ctx = {"case": case, "case_dir": case_dir, "key": key,
+           "mesh_load": msh if reuse else None,
+           "mesh_save": None if reuse else os.path.join(case_dir, "mesh", "case.new.msh")}
+    return run_case(template, params, run_name, plots=plots, log=log, ctx=ctx, folder=folder)
+
+
 def list_cases():
-    return {k: {"params": v["params"], "info": v["info"], "doc": v["doc"]}
+    return {k: {"params": v["params"], "info": v["info"], "doc": v["doc"],
+                "transient": bool(v.get("transient", "tau_end" in v["params"])),
+                "steps": {p: project.step_of(p) for p in v["params"]}}
             for k, v in CASES.items()}

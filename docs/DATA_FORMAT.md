@@ -1,6 +1,8 @@
 # pnpflow result format (contract between solver and HUD)
 
-Every run writes one folder: `results/<run_name>/`.
+Every run writes one folder: `results/<run_name>/` (runs from the command line with a
+template), or `cases/<case>/results/<run_name>/` (runs of a case, see **Cases** below). Run
+names are unique across both, so `/api/run/<name>` finds either.
 All JSON is plain UTF-8. Numbers are floats. Missing items may be absent — the HUD must tolerate that.
 
 ## progress.json  (rewritten during the run)
@@ -164,3 +166,48 @@ For gmsh / ParaView. Not read by the HUD.
 `device: auto|gpu|cpu` and sets it.)
 `python run.py --list` prints the cases and their default params as JSON:
 `{"cylinder": {"params": {...}, "info": {...}}, ...}`
+
+## Cases  (`cases/<case>/`, added 2026-11-22)
+```
+cases/<case>/case.json             the case: everything before a run
+cases/<case>/mesh/case.msh         P2 mesh, msh4, named physical groups (reused by runs)
+cases/<case>/mesh/status.json      {state: building|done|failed, key, finished, stats, n_dofs, info, error}
+cases/<case>/mesh/validation.json  {"checks": [...]} same shape as diagnose.json
+cases/<case>/mesh/view_a.png, view_b.png, mesh.json (nodes, triangles, boundary_edges, bbox, corners), mesh.log
+cases/<case>/results/<run>/        a run (all files above) + case.json (frozen copy) + mesh/case.msh
+```
+`case.json`:
+```json
+{"format": 1, "name": "my_pore", "template": "pore_charging", "description": "",
+ "created": "...", "modified": "...",
+ "params": {"alpha_in": 1.0, "L_nm": 1000.0, "...": "..."},
+ "units": {"L_nm": "µm"},
+ "figures": {"standard": true},
+ "mesh": {"density": 1.0,
+          "boundaries": [{"boundary": "pore_wall", "size": 0.05, "layer": 0.2, "growth": 1.2}],
+          "regions": [{"kind": "box", "x0": 0, "x1": 2, "y0": -1, "y1": 1, "size": 0.05, "growth": 1.2},
+                      {"kind": "disk", "x": 1, "y": 0, "r": 0.3, "size": 0.02, "growth": 1.2}],
+          "corners": {"enabled": true, "size": 0, "radius": 0, "max_angle": 80},
+          "paint": [{"x": 0.9, "y": 0.1, "r": 0.1, "size": 0.02}], "paint_growth": 1.2},
+ "time": {"save": {"mode": "template|uniform|log|list", "dtau": 0.05, "n": 20, "tau_min": 1e-4, "list": []},
+          "dt_max": null, "max_rejects": 12}}
+```
+Lengths in `mesh` are model coordinates (the template's length unit, e.g. a_ref for the pore).
+`params` are in the template's units; `units` only changes how the app shows them. Missing
+blocks take the defaults of `pnpflow/project.py`. `density` scales every element size by
+1/density. Refinements grow from `size` with ratio `growth` until the template's own size is
+smaller. `corners` refines geometry corners whose interior angle is below `max_angle` or above
+185° (re-entrant); size 0 = radius / 8, radius 0 = 2 % of the domain diagonal.
+
+The mesh key (`project.mesh_key`) hashes the template, the `mesh` block and the geometry, mesh and
+materials parameters (`project.STEP_RULES`); changing time, boundary or physics settings keeps
+the case mesh.
+
+## convergence.txt  (every run, added 2026-11-22)
+Plain text: run, template, device, result; each continuation stage with its Newton iterations
+(`it`, `|R|`, `|dU|`, `alpha`); for time-dependent runs every accepted step (`tau`, `dtau`, Newton
+iterations, error estimate, rejects, final `|R|`) and the equilibrium check; then the checks.
+Failed runs get the Newton history from progress.json.
+
+`run.py --list` entries also carry `"transient": bool` and `"steps": {param: step}` (the
+construction step that owns each parameter).

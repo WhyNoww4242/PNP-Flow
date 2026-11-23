@@ -260,11 +260,11 @@ def get_cases():
 
 
 def launch(body):
-    case = str(body.get("case", ""))
+    case = body.get("case")
     name = str(body.get("name", ""))
     params = body.get("params") or {}
-    if not CASE_RE.match(case):
-        return 400, {"error": "invalid case name"}
+    if not isinstance(case, str) or not CASE_RE.match(case):
+        return 400, {"error": "no case selected (the case list did not load: check /api/cases)"}
     path = run_path(name)
     if not path:
         return 400, {"error": "invalid run name (letters, digits, _ . - only)"}

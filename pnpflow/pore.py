@@ -308,6 +308,9 @@ def build_pore_charging(p):
     transient = {
         "t_end": p["tau_end"] * t_per_tau,
         "outputs": [t * t_per_tau for t in taus],
+        # always saved, whatever the case's save mode (the summary figure shows them)
+        "required_outputs": [t * t_per_tau for t in (TAU_EARLY, p["tau_mid"])
+                             if 0 < t <= p["tau_end"] * (1 + 1e-9)],
         "dt0": p["dt0"], "rtol": p["rtol"], "dt_max": 0.02 * t_per_tau,
         "t_per_tau": t_per_tau,
         "profiles": time_profiles,

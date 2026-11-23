@@ -172,7 +172,7 @@ function showChecks(app, doc, body) {
 }
 
 function showMesh(app, doc, body) {
-  renderMesh(app, doc, body);
+  renderMesh(app, doc, body, { resultOnly: true });
 }
 
 // ---------------------------------------------------------------------------

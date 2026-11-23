@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How pnpflow works</title>
+<meta name="description" content="Interactive map of pnpflow as of 2026-11-22: the run pipeline, what each file in results/<run>/ holds, where the mesh and the data points are saved, and how the app talks to the solver.">
+<meta name="color-scheme" content="dark light">
+<style>
+/* Dark by default; light when the OS asks for it (or data-theme="light"). */
+:root {
+  --bg: #0d1016; --surface: #141922; --raised: #1a202b; --hover: #212836;
+  --border: #252c39; --border-strong: #343d4e;
+  --text: #dfe5ee; --dim: #9aa5b6; --faint: #6b7586;
+  --accent: #5cb8ff; --accent-soft: rgba(92,184,255,.14); --accent-line: rgba(92,184,255,.45);
+  --before: #b197fc; --live: #fcc419; --after: #51cf66; --mem: #74c0fc;
+  --code-bg: #0f131a;
+  --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Mono", "SF Mono", Consolas, "DejaVu Sans Mono", monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f5f8; --surface: #ffffff; --raised: #f7f8fa; --hover: #edf0f5;
+    --border: #dde2ea; --border-strong: #c7cfdb;
+    --text: #1c2330; --dim: #556072; --faint: #7d8797;
+    --accent: #0b6fd0; --accent-soft: rgba(11,111,208,.10); --accent-line: rgba(11,111,208,.4);
+    --before: #6741d9; --live: #a06d00; --after: #2b8a3e; --mem: #1c7ed6;
+    --code-bg: #f0f2f6; color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f3f5f8; --surface: #ffffff; --raised: #f7f8fa; --hover: #edf0f5;
+  --border: #dde2ea; --border-strong: #c7cfdb;
+  --text: #1c2330; --dim: #556072; --faint: #7d8797;
+  --accent: #0b6fd0; --accent-soft: rgba(11,111,208,.10); --accent-line: rgba(11,111,208,.4);
+  --before: #6741d9; --live: #a06d00; --after: #2b8a3e; --mem: #1c7ed6;
+  --code-bg: #f0f2f6; color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 var(--font); }
+main { max-width: 1120px; margin: 0 auto; padding: 40px 24px 80px; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; font-weight: 650; letter-spacing: -0.01em; }
+h2 { font-size: 21px; margin: 56px 0 6px; font-weight: 620; }
+h3 { font-size: 15px; margin: 0 0 6px; font-weight: 620; }
+p { margin: 0 0 12px; }
+.lead { color: var(--dim); font-size: 16.5px; max-width: 72ch; }
+.sub { color: var(--dim); max-width: 75ch; margin-bottom: 18px; }
+code, .mono { font-family: var(--mono); font-size: 0.88em; }
+code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+a { color: var(--accent); }
+.icon { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0 0; font-size: 13px; color: var(--dim); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.d-before { background: var(--before); } .d-live { background: var(--live); } .d-after { background: var(--after); } .d-mem { background: var(--mem); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* pipeline */
+.pipe { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 6px; margin-top: 18px; }
+.step { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 4px; padding: 10px 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); min-height: 92px; position: relative; transition: background 150ms ease, border-color 150ms ease; }
+.step:hover { background: var(--hover); }
+.step:active { background: var(--border-strong); }
+.step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.step[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.step .s-name { font-weight: 600; font-size: 13.5px; line-height: 1.25; }
+.step .s-code { font-family: var(--mono); font-size: 11px; color: var(--dim); word-break: break-word; }
+.step .s-dots { display: flex; gap: 4px; margin-top: auto; }
+.step-detail { margin-top: 12px; padding: 18px 20px; display: grid; grid-template-columns: 1.3fr 1fr; gap: 24px; }
+.step-detail ul { margin: 0; padding-left: 18px; }
+.step-detail li { margin: 3px 0; }
+.writes { display: flex; flex-direction: column; gap: 6px; }
+.fileref { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12.5px; color: var(--accent); border-radius: 4px; padding: 1px 2px; }
+.fileref:hover { text-decoration: underline; }
+.fileref:focus-visible { outline: 2px solid var(--accent); }
+.muted { color: var(--dim); font-size: 13.5px; }
+
+/* run folder explorer */
+.explorer { display: grid; grid-template-columns: minmax(260px, 360px) 1fr; margin-top: 14px; overflow: hidden; }
+.tree { border-right: 1px solid var(--border); padding: 10px 6px; max-height: 620px; overflow: auto; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 6px 10px; }
+.chip { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--border-strong); color: var(--dim); font-size: 12.5px; transition: background 150ms ease; }
+.chip:hover { background: var(--hover); color: var(--text); }
+.chip:active { background: var(--border-strong); }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--text); }
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.node { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 16px 16px 1fr auto; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; border-radius: 6px; font-family: var(--mono); font-size: 12.5px; transition: background 150ms ease, opacity 150ms ease; }
+.node:hover { background: var(--hover); }
+.node:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.node[aria-selected="true"] { background: var(--accent-soft); }
+.node.dimmed { opacity: 0.32; }
+.node .size { color: var(--faint); font-size: 11.5px; }
+.node.child { padding-left: 30px; }
+.node.flash { animation: flash 900ms ease; }
+@keyframes flash { 0%, 40% { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-line); } 100% { background: transparent; } }
+.detail { padding: 20px 22px; min-width: 0; }
+.detail h3 { font-family: var(--mono); font-size: 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 14px 0; font-size: 14px; }
+.facts dt { color: var(--dim); }
+.facts dd { margin: 0; }
+.when { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font); font-size: 12px; font-weight: 600; padding: 1px 9px; border-radius: 10px; border: 1px solid var(--border-strong); color: var(--dim); }
+pre.peek { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow: auto; font: 12px/1.5 var(--mono); margin: 8px 0 0; max-height: 260px; }
+
+/* finder */
+.finder { display: grid; grid-template-columns: minmax(240px, 1fr) 1.4fr; gap: 0; margin-top: 14px; overflow: hidden; }
+.qs { display: flex; flex-direction: column; padding: 8px; border-right: 1px solid var(--border); }
+.q { all: unset; box-sizing: border-box; cursor: pointer; padding: 9px 12px; border-radius: 6px; font-size: 14px; transition: background 150ms ease; }
+.q:hover { background: var(--hover); }
+.q:active { background: var(--border-strong); }
+.q[aria-pressed="true"] { background: var(--accent-soft); }
+.q:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.answer { padding: 18px 20px; min-width: 0; }
+
+/* mesh timeline */
+.timeline { margin-top: 16px; padding: 18px 16px 10px; overflow-x: auto; }
+.timeline svg { display: block; width: 100%; min-width: 720px; height: auto; }
+.timeline text { font-family: var(--font); fill: var(--text); }
+.timeline .t-dim { fill: var(--dim); }
+.timeline .t-mono { font-family: var(--mono); }
+.callout { margin-top: 14px; padding: 14px 16px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--live) 45%, transparent); background: color-mix(in srgb, var(--live) 8%, transparent); display: flex; gap: 12px; }
+.callout .icon { color: var(--live); margin-top: 3px; }
+
+/* app wiring */
+.wiring { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+.box { padding: 16px 18px; }
+.box h3 { display: flex; align-items: center; gap: 8px; }
+.box ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+table.pages { width: 100%; border-collapse: collapse; font-size: 14px; margin-top: 14px; }
+table.pages th, table.pages td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.pages thead th { color: var(--dim); font-weight: 500; font-size: 13px; }
+table.pages tbody tr:last-child td, table.pages tbody tr:last-child th { border-bottom: none; }
+.tablewrap { overflow-x: auto; }
+
+.gaps { margin-top: 14px; padding: 6px 18px; }
+.gaps li { margin: 8px 0; }
+footer { margin-top: 56px; color: var(--faint); font-size: 13px; }
+
+@media (max-width: 900px) {
+  .pipe { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .step-detail, .explorer, .finder, .wiring { grid-template-columns: 1fr; }
+  .tree, .qs { border-right: none; border-bottom: 1px solid var(--border); max-height: 360px; }
+}
+@media (max-width: 480px) {
+  main { padding: 28px 16px 60px; }
+  h1 { font-size: 25px; }
+  .pipe { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .facts { grid-template-columns: 1fr; gap: 2px; }
+  .facts dd { margin-bottom: 8px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v8.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 2.5 20h19z"/><path d="M12 10v4.5M12 17.5v.01"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="7" rx="1.5"/><rect x="3.5" y="13" width="17" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/><path d="M9 2.5v3.5M15 2.5v3.5M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5"/></symbol>
+</svg>
+
+<main>
+  <h1>How pnpflow works</h1>
+  <p class="lead">A map of the project as it stands on 22 November 2026: what a case holds, what happens when you press Solve, which files a run writes, where the mesh and the data points end up, and how the app reads them back. Click anything with a border to see more.</p>
+  <div class="legend" aria-label="Colour key">
+    <span><i class="dot d-mem"></i>in memory only</span>
+    <span><i class="dot d-before"></i>written before the solve</span>
+    <span><i class="dot d-live"></i>rewritten while it runs</span>
+    <span><i class="dot d-after"></i>written after the solve</span>
+  </div>
+
+  <h2 id="pipeline">What happens when you press Solve</h2>
+  <p class="sub">Everything you set up before a run is a <b>case</b>: <code>cases/&lt;case&gt;/case.json</code> plus its mesh in <code>cases/&lt;case&gt;/mesh/</code>. The app never runs physics itself. Solve starts <code>python run.py --case cases/&lt;case&gt; --name &lt;run&gt;</code> as a separate process, and that process does everything below, writing the <b>result</b> into <code>cases/&lt;case&gt;/results/&lt;run&gt;/</code>. Older runs made from the command line (<code>run.py &lt;template&gt; --set …</code>) live in <code>results/&lt;run&gt;/</code> and still open read-only.</p>
+  <div class="pipe" id="pipe" role="group" aria-label="Pipeline steps"></div>
+  <div class="panel step-detail" id="step-detail" aria-live="polite"></div>
+
+  <h2 id="folder">Inside one run folder</h2>
+  <p class="sub">A result: the real contents of the narrow-pore charging run (97 MB), plus the three files every case run adds (<code>case.json</code>, <code>convergence.txt</code>, <code>mesh/case.msh</code>). For a case run the folder is <code>cases/&lt;case&gt;/results/&lt;run&gt;/</code>. Pick a file to see what it holds, who writes it, when, and who reads it.</p>
+  <div class="panel explorer">
+    <div class="tree" id="tree">
+      <div class="filters" role="group" aria-label="Show files written">
+        <button class="chip" type="button" data-f="all" aria-pressed="true">all</button>
+        <button class="chip" type="button" data-f="before" aria-pressed="false"><i class="dot d-before"></i>before solve</button>
+        <button class="chip" type="button" data-f="live" aria-pressed="false"><i class="dot d-live"></i>live</button>
+        <button class="chip" type="button" data-f="after" aria-pressed="false"><i class="dot d-after"></i>after</button>
+      </div>
+      <div id="nodes" role="listbox" aria-label="Files in results/pore_narrow"></div>
+    </div>
+    <div class="detail" id="file-detail" aria-live="polite"></div>
+  </div>
+
+  <h2 id="mesh">Where the mesh is</h2>
+  <p class="sub">Each case owns one mesh: <code>cases/&lt;case&gt;/mesh/case.msh</code> (P2, named boundaries), created by <b>Create mesh</b> (Geometry or Mesh step; runs on the CPU) or by the first Solve, then reused by every run until a geometry, mesh or materials setting changes. During a run it lives in memory as a <code>Mesh</code> object (<code>pnpflow/mesh.py</code>); each result keeps a copy, its pictures and its Mesh Validation.</p>
+  <div class="panel timeline">
+    <svg viewBox="0 0 980 250" role="img" aria-labelledby="tl-title tl-desc">
+      <title id="tl-title">Mesh lifetime during one run</title>
+      <desc id="tl-desc">The case's build function calls a gmsh geometry builder, which generates curved P2 triangles in memory. Before the solve the run writes mesh/view_a.png, mesh/view_b.png and mesh/diagnose.json. After the solve it writes solution.msh, solution.vtu, solution.npz and fields.json, which all contain the mesh nodes and triangles.</desc>
+      <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" style="fill: var(--dim)"/></marker></defs>
+      <text x="40" y="32" class="t-dim" font-size="13">time in one run</text>
+      <line x1="150" y1="28" x2="940" y2="28" style="stroke: var(--border-strong); stroke-width: 2" marker-end="url(#ar)"/>
+      <g>
+        <rect x="40" y="52" width="400" height="36" rx="18" style="fill: color-mix(in srgb, var(--mem) 18%, transparent); stroke: var(--mem)"/>
+        <text x="240" y="75" font-size="13.5" text-anchor="middle">load case.msh, or gmsh builds it → Mesh in memory</text>
+      </g>
+      <rect x="40" y="52" width="900" height="36" rx="18" style="fill: none; stroke: var(--mem); stroke-dasharray: 5 5"/>
+      <text x="700" y="75" font-size="13" text-anchor="middle" class="t-dim">same Mesh used by assembly, Newton, analysis</text>
+      <g>
+        <line x1="300" y1="92" x2="300" y2="128" style="stroke: var(--before); stroke-width: 2" marker-end="url(#ar)"/>
+        <text x="300" y="150" font-size="13" text-anchor="middle" class="t-mono" style="fill: var(--before)">cases/&lt;case&gt;/mesh/case.msh</text>
+        <text x="300" y="170" font-size="13" text-anchor="middle" class="t-mono" style="fill: var(--before)">mesh/view_a.png  ·  view_b.png</text>
+        <text x="300" y="190" font-size="13" text-anchor="middle" class="t-mono" style="fill: var(--before)">validation.json  ·  diagnose.json</text>
+        <text x="300" y="214" font-size="12" text-anchor="middle" class="t-dim">the mesh, its pictures and its validation</text>
+      </g>
+      <g>
+        <line x1="790" y1="92" x2="790" y2="128" style="stroke: var(--after); stroke-width: 2" marker-end="url(#ar)"/>
+        <text x="790" y="150" font-size="13" text-anchor="middle" class="t-mono" style="fill: var(--after)">solution.msh  ·  solution.vtu</text>
+        <text x="790" y="170" font-size="13" text-anchor="middle" class="t-mono" style="fill: var(--after)">solution.npz (X, tri)</text>
+        <text x="790" y="190" font-size="13" text-anchor="middle" class="t-mono" style="fill: var(--after)">fields.json (nodes, triangles)</text>
+        <text x="790" y="214" font-size="12" text-anchor="middle" class="t-dim">mesh + solution together</text>
+      </g>
+      <text x="40" y="244" font-size="12" class="t-dim">Before the solve: Geometry → Mesh steps.  After: Results.</text>
+    </svg>
+  </div>
+  <div class="callout" role="note">
+    <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+    <div>
+      <b>Which .msh to use.</b>
+      <p style="margin:4px 0 0"><code>mesh/case.msh</code> keeps the named physical groups and is the one to reuse (<code>geometry.load_msh</code>). <code>solution.msh</code> is written through meshio with every element in physical group 1, so the boundary names are lost there; it is only for looking at the fields in gmsh. Runs made from the command line without a case (<code>results/&lt;run&gt;/</code>) do not save a mesh at all, only <code>solution.*</code>.</p>
+    </div>
+  </div>
+
+  <h2 id="data">Where the data points are</h2>
+  <p class="sub">Pick what you want to get out of a run. Each answer names the file, what is inside, and a line of Python to load it.</p>
+  <div class="panel finder">
+    <div class="qs" id="qs" role="group" aria-label="What do you want"></div>
+    <div class="answer" id="answer" aria-live="polite"></div>
+  </div>
+
+  <h2 id="app">How the app and the solver talk</h2>
+  <p class="sub">Everything goes through files on disk, so a run started from the terminal shows up in the app the same way as one started from the Solve button.</p>
+  <div class="wiring">
+    <div class="panel box">
+      <h3><svg class="icon" aria-hidden="true"><use href="#i-monitor"/></svg>App (browser)</h3>
+      <p class="muted"><code>app/ui/</code>: plain JS modules, WebGL field view, Plotly charts. Opens at <code>http://localhost:8766</code>.</p>
+      <ul>
+        <li>Template list and defaults from <code>/api/cases</code> (= <code>run.py --list</code>)</li>
+        <li>Parameter edits stay in the browser until Solve (they become <code>--set</code> flags)</li>
+        <li>Polls <code>/api/runs</code> and <code>progress.json</code> every 1.5 s</li>
+      </ul>
+    </div>
+    <div class="panel box">
+      <h3><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg>Dev server</h3>
+      <p class="muted"><code>app/server.py</code> (port 8766) reuses the handler of <code>hud/server.py</code> (the older dashboard on 8765). Python standard library only.</p>
+      <ul>
+        <li><code>POST /api/launch</code> starts <code>run.py</code> with <code>JAX_PLATFORMS</code> set from the Device choice; stdout goes to <code>results/&lt;run&gt;/stdout.log</code></li>
+        <li><code>GET /api/run/&lt;name&gt;/&lt;file&gt;</code> serves the run files, with an allow-list of names</li>
+        <li><code>/api/devices</code> checks for a GPU</li>
+      </ul>
+    </div>
+    <div class="panel box">
+      <h3><svg class="icon" aria-hidden="true"><use href="#i-cpu"/></svg>Solver process</h3>
+      <p class="muted"><code>run.py</code> → <code>pnpflow/runner.py</code>. One process per run, inside the <code>pnpflow</code> conda env.</p>
+      <ul>
+        <li>JAX assembly on the GPU when present; PARDISO sparse solve on the CPU</li>
+        <li>Writes only into its own <code>results/&lt;run&gt;/</code></li>
+        <li>The Tauri desktop shell (<code>app/src-tauri</code>) is written but not compiled yet; it will replace the dev server</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 style="margin-top:28px">Which app step reads which file</h3>
+  <div class="tablewrap">
+  <table class="pages">
+    <thead><tr><th>step</th><th>parameters edited there</th><th>files it reads</th></tr></thead>
+    <tbody>
+      <tr><th>Geometry</th><td>pore radii, lengths, box sizes (<code>alpha_in</code>, <code>L_nm</code>, <code>half_width</code>, …)</td><td><code>mesh/view_a.png</code>, <code>summary.json</code> → boundary names and BCs</td></tr>
+      <tr><th>Mesh</th><td>element sizes (<code>h_wall</code>, …) and the mesh tools (density, refinement, corners, paint) in case.json</td><td>case: <code>cases/&lt;case&gt;/mesh/</code> (<code>validation.json</code> as the Mesh Validation bar, <code>mesh.json</code> for the tools canvas, views, <code>status.json</code>); result: <code>mesh/diagnose.json</code>, views</td></tr>
+      <tr><th>Materials</th><td><code>T</code>, <code>delta</code>, <code>c0_mM</code>, <code>eps</code>, <code>D</code>, diffusivities</td><td><code>summary.json</code> → <code>model.species</code></td></tr>
+      <tr><th>Boundaries</th><td>wall potentials, Stern, <code>end_charged</code>, …</td><td><code>summary.json</code> → <code>model.boundaries</code>, coverage checks</td></tr>
+      <tr><th>Equations</th><td><code>Pe</code>, <code>Re</code>, <code>K</code>, <code>Ex</code>, advection, SUPG</td><td><code>summary.json</code> → <code>model</code></td></tr>
+      <tr><th>Study</th><td>time and solver settings (<code>tau_end</code>, <code>dt0</code>, <code>rtol</code>, …) and anything not listed above</td><td><code>progress.json</code> (live), <code>stdout.log</code></td></tr>
+      <tr><th>Results</th><td>all inputs, grouped by step, in the Data panel</td><td><code>fields.json</code>, <code>fields_time.json</code>, <code>profiles.json</code>, <code>summary.json</code>, <code>figures/</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="muted" style="margin-top:10px">Which step owns a parameter is decided by its name, in <code>app/ui/js/params.js</code> (<code>STEP_RULES</code>). A new template parameter with an unknown name lands on the Study page, so it can always be edited.</p>
+
+  <h2 id="gaps">Not built yet</h2>
+  <div class="panel gaps">
+    <ul>
+      <li><b>Generic case.</b> A case is still tied to a template: its parameters are the template's. Free geometry, choosing BCs or ions in the app, and choosing which figures to make wait for the generic case (<code>docs/PLAN.md</code>, phase 1).</li>
+      <li><b>Desktop shell.</b> Cases work through the browser dev server (<code>app/server.py</code>); the Tauri commands for them are not written yet.</li>
+      <li><b>MCP server</b> (<code>pnpflow/mcp</code>): specified in <code>docs/MCP.md</code>, not started.</li>
+      <li><b>Time-varying boundary conditions</b> (CV sweeps): steps only so far.</li>
+    </ul>
+  </div>
+
+  <footer>Source of truth: <code>docs/DATA_FORMAT.md</code> (file contract), <code>AGENTS.md</code> (how the code works), <code>pnpflow/runner.py</code> (the order things are written in).</footer>
+</main>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const el = (tag, attrs = {}, ...kids) => {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") e.className = v;
+      else if (k === "html") e.innerHTML = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v === true ? "" : v);
+    }
+    for (const k of kids.flat()) if (k != null) e.append(k.nodeType ? k : document.createTextNode(k));
+    return e;
+  };
+  const svgIcon = (id) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("class", "icon"); s.setAttribute("aria-hidden", "true"); const u = document.createElementNS("http://www.w3.org/2000/svg", "use"); u.setAttribute("href", "#i-" + id); s.append(u); return s; };
+  const WHEN = { mem: "in memory", before: "before the solve", live: "while running", after: "after the solve" };
+
+  // ------------------------------------------------------------------ files
+  const FILES = [
+    { p: "case.json", size: "2K", when: "before", by: "runner.run_from_case", reads: "app: Study page of a result (read-only), Open its case",
+      what: "A frozen copy of the case as it was when the run started: template, every parameter, units, mesh options, time settings. The case itself can change afterwards; this copy says exactly what this result was run with.",
+      peek: '{"template": "pore_charging", "params": {"L_nm": 1000.0, "tau_end": 1.0, ...},\n "mesh": {"density": 1.0, "boundaries": [], "corners": {"enabled": true}},\n "time": {"save": {"mode": "uniform", "dtau": 0.05}, "max_rejects": 12}}' },
+    { p: "convergence.txt", size: "≈10K", when: "after", by: "project.write_convergence", reads: "you; the Log of a run",
+      what: "How the solve went, as plain text: every Newton stage with |R|, |dU| and the line-search step, or every time step with τ, Δτ, Newton iterations, error estimate and rejections; then the checks. Failed runs get the Newton history they reached.",
+      peek: 'time stepping: BDF2 ..., 33 accepted steps, 5 rejected, reached tau = 0.02 of 0.02\n   step         tau        dtau newton         err rejects   |R| final\n      1  2.5000e-05  2.5000e-05      2  3.8922e-01       0  5.2307e-10' },
+    { p: "progress.json", size: "40K", when: "live", by: "output.Progress (pnpflow/output.py)", reads: "app: Study page, status bar, step dots; polled ~1/s",
+      what: "Live status: state (meshing, assembling, solving, post, done, failed), stage, Newton iteration, residual, fraction done, health verdict (converging / struggling / stalled / failed) with its tells, and the full iteration history. Time-dependent runs add t, dt and rejected steps.",
+      peek: '{"state": "solving", "fraction": 0.42, "health": "converging",\n "tells": {"res_norm": 1.2e-6, "ratio": 0.03, "dt": 38.7},\n "time": {"tau": 0.42, "tau_end": 1.0, "step": 51}, ...}' },
+    { p: "stdout.log", size: "8K", when: "live", by: "the server redirects the process output here", reads: "app: Study page, Log panel",
+      what: "Everything run.py prints: the launch command, device, mesh size, every Newton step or time step. Runs started from a terminal print there instead, so this file is missing for them." },
+    { p: "mesh/", dir: true },
+    { p: "mesh/case.msh", size: "≈5M", when: "before", by: "runner._store_case_mesh", reads: "you: gmsh; geometry.load_msh",
+      what: "The mesh this run used, with every named physical group (pore_wall, sdl_far, …). The master copy is cases/<case>/mesh/case.msh, reused by the next run while the mesh key is unchanged." },
+    { p: "mesh/view_a.png", size: "≈0.8M", when: "before", by: "runner._mesh_postprocess → meshtools", reads: "app: Geometry and Mesh pages",
+      what: "Whole domain, each named boundary in its own colour; unnamed edges as red dots. Written right after gmsh, before any solve, so failed runs have it too." },
+    { p: "mesh/view_b.png", size: "≈0.9M", when: "before", by: "runner._mesh_postprocess → meshtools", reads: "app: Mesh page",
+      what: "Zoom on the finest region (smallest elements), triangles coloured by shape quality q (1 = equilateral)." },
+    { p: "mesh/diagnose.json", size: "4K", when: "before", by: "meshtools.diagnose", reads: "app: Mesh page (Mesh Validation bar), Boundaries page (coverage)",
+      what: "The mesh checks: unnamed or duplicate boundaries, BCs naming missing boundaries, quality, size jumps, inverted P2 elements, connectivity, EDL resolution (elements across 3 λ_D), far-field distance, size budget. Each has status, value, limit, note and fix. Also copied into summary.json → mesh_checks.",
+      peek: '{"checks": [\n  {"name": "EDL resolution", "value": 9.59, "limit": 8.0,\n   "status": "pass", "note": "elements across 3 delta ...", "fix": ""},\n  ...]}' },
+    { p: "summary.json", size: "24K", when: "after", by: "runner.py (also a stub on failure)", reads: "app: every step page and Results → Checks",
+      what: "The run's record: input (every parameter value used), model (species, flow, boundaries and their BCs), params (dimensionless groups), mesh statistics, solver history, transient step log, checks, integrals (fluxes, charge, charging curves), sensitivities, device, figure list.",
+      peek: '{"case": "pore_charging",\n "input": {"alpha_in": 1.0, "L_nm": 1000.0, "h_far": 1.0, "tau_end": 1.0, ...},\n "mesh": {"n_elements": 26154, "n_dofs": 286734, ...},\n "checks": [...], "integrals": {"charging": {"tau": [...], "mu_pore_avg": [...]}}}' },
+    { p: "fields.json", size: "11M", when: "after", by: "output.write_fields", reads: "app: Results → Field map",
+      what: "Every field at every mesh node at the final time: nodes [[r, z], …], triangles (P2 elements split into linear ones), boundary_edges by name, and fields c+, c-, phi, rho, |E| … plus labels, bbox and the default zoom (focus_bbox).",
+      peek: '{"nodes": [[0.0, -50.0], ...], "triangles": [[0, 1, 2], ...],\n "boundary_edges": {"pore_wall": [[i, j], ...]},\n "fields": {"phi": [...], "c+": [...]}, "symmetry": "axisym"}' },
+    { p: "fields_time.json", size: "22M", when: "after", by: "output.write_fields_time (time-dependent runs only)", reads: "app: Field map time slider",
+      what: "The same node fields at every output time (one array per tau), so the app can scrub through the charging." },
+    { p: "profiles.json", size: "756K", when: "after", by: "runner.py (case profile callbacks)", reads: "app: Results → Profiles",
+      what: "1D cuts: axial lines along the pore, radial lines at Z = 0.5, wall lines; time-dependent runs write one line per output time with a time tag.",
+      peek: '{"lines": [{"name": "axial_tau_0.13", "coord_name": "Z",\n  "coord": [...], "values": {"mu": [...], "phi": [...]},\n  "time": {"tau": 0.13}}, ...]}' },
+    { p: "csv/", dir: true },
+    { p: "csv/axial__mu.csv", size: "≈300K", when: "after", by: "pnpflow/export.py", reads: "you: Excel, Origin, pandas",
+      what: "One file per line group and quantity: the coordinate, then one column per tau. Same for axial__phi, axial__rho, radial_Z0.5__mu …" },
+    { p: "csv/timeseries_charging.csv", size: "≈10K", when: "after", by: "pnpflow/export.py", reads: "you",
+      what: "List-valued integrals against time: tau, mu_pore_avg, mu_Z05, Q_pore_per_rad." },
+    { p: "csv/profiles_long.csv", size: "≈1.5M", when: "after", by: "pnpflow/export.py", reads: "you (one tidy table for plotting tools)",
+      what: "Every profile point in long form: line, tau, coord_name, coord, quantity, value. Re-export old runs with python tools/export_csv.py results/<run>." },
+    { p: "figures/", dir: true },
+    { p: "figures/*.png", size: "3.4M", when: "after", by: "pnpflow/figures.py, figures_pore.py", reads: "app: Results → Figures",
+      what: "House-style figures at 300 dpi (cmasher maps, Times, arrow axes): field_phi, field_cplus, pore_charging, pore_evolution, pore_profiles, time_steps …" },
+    { p: "svg/*.svg", size: "2.3M", when: "after", by: "same as figures/", reads: "you: papers and slides",
+      what: "Vector versions of every figure, same names." },
+    { p: "solution.npz", size: "15M", when: "after", by: "runner.py (numpy.savez_compressed)", reads: "you: Python restarts and custom analysis",
+      what: "The raw solution: U (every unknown, layout [c_1..c_S, phi, u] on P2 nodes then p on P1 vertices), X (P2 node coordinates), tri (P2 elements); time-dependent runs add t and U_t (one U per output time)." },
+    { p: "solution.vtu", size: "7.9M", when: "after", by: "output.write_meshfiles (meshio)", reads: "you: ParaView",
+      what: "The P2 mesh (triangle6) with every field as point data. Opens straight in ParaView." },
+    { p: "solution.msh", size: "32M", when: "after", by: "output.write_meshfiles (meshio, gmsh 2.2 ASCII)", reads: "you: gmsh",
+      what: "Same mesh and fields for gmsh. Boundary names are not kept here (all elements in physical group 1)." },
+  ];
+  const dirOf = (p) => (p.includes("/") ? p.split("/")[0] + "/" : null);
+  let filter = "all", selected = "mesh/diagnose.json";
+
+  function renderNodes() {
+    const box = $("#nodes");
+    box.replaceChildren();
+    for (const f of FILES) {
+      if (f.dir) {
+        const kids = FILES.filter((x) => !x.dir && dirOf(x.p) === f.p);
+        const anyOn = filter === "all" || kids.some((k) => k.when === filter);
+        box.append(el("div", { class: "node" + (anyOn ? "" : " dimmed"), role: "presentation", style: "cursor:default" },
+          svgIcon("chev"), svgIcon("folder"), el("span", {}, f.p), el("span")));
+        continue;
+      }
+      const on = filter === "all" || f.when === filter;
+      const name = dirOf(f.p) ? f.p.slice(dirOf(f.p).length) : f.p;
+      const b = el("button", { class: "node" + (dirOf(f.p) ? " child" : "") + (on ? "" : " dimmed"), type: "button", role: "option",
+        "aria-selected": String(f.p === selected), "data-p": f.p, onclick: () => select(f.p, false) },
+        el("i", { class: "dot d-" + f.when, title: WHEN[f.when] }), svgIcon("file"), el("span", {}, name), el("span", { class: "size" }, f.size));
+      box.append(b);
+    }
+  }
+  function renderFile() {
+    const f = FILES.find((x) => x.p === selected);
+    const d = $("#file-detail");
+    d.replaceChildren(
+      el("h3", {}, f.p, el("span", { class: "when" }, el("i", { class: "dot d-" + f.when }), WHEN[f.when])),
+      el("p", {}, f.what),
+      el("dl", { class: "facts" },
+        el("dt", {}, "written by"), el("dd", {}, el("code", {}, f.by)),
+        el("dt", {}, "read by"), el("dd", {}, f.reads),
+        el("dt", {}, "size here"), el("dd", {}, f.size),
+        el("dt", {}, "full path"), el("dd", {}, el("code", {}, "results/pore_narrow/" + f.p))),
+      f.peek ? el("pre", { class: "peek", "aria-label": "Shape of the file" }, f.peek) : null);
+  }
+  function select(p, scroll) {
+    selected = p;
+    renderNodes(); renderFile();
+    const n = $(`.node[data-p="${CSS.escape(p)}"]`);
+    if (n) {
+      if (scroll) { n.scrollIntoView({ block: "nearest" }); $("#folder").scrollIntoView({ behavior: "smooth", block: "start" }); n.classList.add("flash"); }
+    }
+  }
+  for (const c of document.querySelectorAll(".filters .chip")) c.addEventListener("click", () => {
+    filter = c.dataset.f;
+    for (const x of document.querySelectorAll(".filters .chip")) x.setAttribute("aria-pressed", String(x === c));
+    renderNodes();
+  });
+  const fileRef = (p, label) => el("button", { class: "fileref", type: "button", onclick: () => select(p, true) }, svgIcon("file"), label || p);
+
+  // --------------------------------------------------------------- pipeline
+  const STEPS = [
+    { n: "Case", code: "project.py, cases.py, pore.py", dots: ["before"],
+      what: "case.json names a template (@case in pnpflow/cases.py; the pore one is in pnpflow/pore.py) and holds every parameter, the display units, the mesh options and the time settings. The app edits it on the step pages and saves it as you type. Solve copies it into the result folder (frozen) and starts the run.",
+      writes: [["case.json", "frozen copy in the result"], ["progress.json", "created with state = meshing"], ["stdout.log", "the command line, then the log"]] },
+    { n: "Geometry", code: "geometry.py", dots: ["mem"],
+      what: "A gmsh (OCC kernel) builder draws the domain from the geometry parameters: cylinder_in_box, rectangle, sphere_axisym or pore_axisym. Every boundary curve gets a named physical group (pore_wall, sdl_far, axis, …).",
+      writes: [] },
+    { n: "Mesh", code: "geometry._finish, apply_mesh_options", dots: ["before"],
+      what: "If cases/<case>/mesh/case.msh was built for the same mesh key (template, geometry/mesh/materials parameters, mesh options), it is loaded. Otherwise gmsh meshes the geometry with curved P2 triangles, sized from the Debye length plus the case's mesh tools (density, boundary and region refinement, sharp corners, painted spots), and saves case.msh back into the case. Create mesh does this step alone, on the CPU.",
+      writes: [["mesh/case.msh", "copy of the case mesh"]] },
+    { n: "Mesh Validation", code: "runner._mesh_postprocess", dots: ["before"],
+      what: "Before any solve: the two mesh views are rendered and the mesh is diagnosed. A broken mesh shows up here even if the solve later fails.",
+      writes: [["mesh/view_a.png"], ["mesh/view_b.png"], ["mesh/diagnose.json"]] },
+    { n: "Assemble", code: "model.py, solver.Assembler", dots: ["live"],
+      what: "The weak form (Model.element_residual, edge_residual) is a plain JAX function of one element. It is vmapped over all elements and jit-compiled; the element Jacobian is jax.jacfwd of the residual (exact, never written by hand). Runs on the GPU when present.",
+      writes: [["progress.json", "state = assembling"]] },
+    { n: "Solve", code: "solver.Newton, transient.py", dots: ["live"],
+      what: "Steady runs: Newton with a PARDISO sparse solve (CPU) and positivity-keeping backtracking, wrapped in continuation that halves the step on failure. Time-dependent runs: variable-step BDF2 around the same Newton. Each iteration updates progress.json with the residual and health.",
+      writes: [["progress.json", "every iteration / time step"], ["stdout.log"]] },
+    { n: "Analysis", code: "analysis.py", dots: ["mem"],
+      what: "Boundary fluxes (reaction method), wall charge, forces, recovered gradients (E, current), profiles along lines, the checks (balances, positivity) and adjoint sensitivities dQ/dp.",
+      writes: [] },
+    { n: "Output", code: "output.py, export.py, figures.py", dots: ["after"],
+      what: "Writes the record, the fields, the profiles, the raw solution, the ParaView/gmsh files, the CSV exports, the house-style figures and convergence.txt, then sets progress.json to done.",
+      writes: [["convergence.txt"], ["summary.json"], ["fields.json"], ["fields_time.json"], ["profiles.json"], ["csv/axial__mu.csv", "csv/ (all exports)"], ["figures/*.png", "figures/ and svg/"], ["solution.npz"], ["solution.vtu"], ["solution.msh"]] },
+    { n: "App reads back", code: "app/server.py → app/ui", dots: ["after"],
+      what: "The app lists results/ through /api/runs and fetches each file through /api/run/<name>/<file>. Nothing is held in the server; refresh the page and it reads the same files again.",
+      writes: [] },
+  ];
+  let stepSel = 3;
+  function renderPipe() {
+    const pipe = $("#pipe");
+    pipe.replaceChildren(...STEPS.map((s, i) => el("button", { class: "step", type: "button", "aria-pressed": String(i === stepSel), onclick: () => { stepSel = i; renderPipe(); } },
+      el("span", { class: "s-name" }, s.n), el("span", { class: "s-code" }, s.code),
+      el("span", { class: "s-dots" }, s.dots.map((d) => el("i", { class: "dot d-" + d, title: WHEN[d] }))))));
+    const s = STEPS[stepSel];
+    $("#step-detail").replaceChildren(
+      el("div", {}, el("h3", {}, s.n), el("p", {}, s.what), el("p", { class: "muted" }, "Code: ", el("code", {}, s.code))),
+      el("div", {}, el("h3", {}, "Writes to disk"),
+        s.writes.length ? el("div", { class: "writes" }, s.writes.map(([p, note]) => el("div", {}, fileRef(p), note ? el("span", { class: "muted" }, "  " + note) : null)))
+          : el("p", { class: "muted" }, "Nothing. This step works in memory.")));
+  }
+
+  // ----------------------------------------------------------------- finder
+  const QS = [
+    { q: "The potential or concentration at every node", files: ["fields.json", "solution.vtu"],
+      a: "fields.json holds one value per node for each field, on a linear triangulation of the mesh, together with the node coordinates. For ParaView, open solution.vtu. For the full P2 data, use solution.npz.",
+      py: 'import json\nf = json.load(open("results/pore_narrow/fields.json"))\nr, z = zip(*f["nodes"]); phi = f["fields"]["phi"]' },
+    { q: "Values along a line (axial, radial, wall)", files: ["profiles.json", "csv/axial__mu.csv"],
+      a: "profiles.json has every line cut the case defines; the same data is in csv/ as one file per line group and quantity, with one column per output time.",
+      py: 'import pandas as pd\nmu = pd.read_csv("results/pore_narrow/csv/axial__mu.csv", comment="#")' },
+    { q: "How things change with time", files: ["csv/timeseries_charging.csv", "fields_time.json"],
+      a: "Integrated quantities against tau are in summary.json → integrals.charging and in csv/timeseries_charging.csv. Whole fields at each output time are in fields_time.json (and U_t in solution.npz).",
+      py: 'ts = pd.read_csv("results/pore_narrow/csv/timeseries_charging.csv", comment="#")' },
+    { q: "The mesh itself", files: ["mesh/view_a.png", "solution.npz", "solution.msh"],
+      a: "The mesh with its boundary names: mesh/case.msh (the case's master copy is cases/<case>/mesh/case.msh). Pictures and Mesh Validation: mesh/. Node coordinates and elements: solution.npz (X, tri, P2) or fields.json (nodes, triangles, linear). Mesh statistics: summary.json → mesh.",
+      py: 'from pnpflow.geometry import load_msh\nmesh = load_msh("cases/my_pore/mesh/case.msh")   # P2, named boundaries' },
+    { q: "Did the mesh pass its validation", files: ["mesh/diagnose.json"],
+      a: "mesh/diagnose.json (case mesh: validation.json), shown in the app as the Mesh Validation bar at the top of the Mesh page. summary.json → checks has one roll-up entry, 'mesh diagnose'.",
+      py: 'chk = json.load(open("results/pore_narrow/mesh/diagnose.json"))["checks"]\n[c["name"] for c in chk if c["status"] != "pass"]' },
+    { q: "How the solve converged", files: ["convergence.txt", "progress.json"],
+      a: "convergence.txt: every Newton stage or time step with its residuals, then the checks. While the run goes, progress.json has the live residual and health.",
+      py: 'print(open("cases/my_pore/results/run1/convergence.txt").read())' },
+    { q: "Which parameters a run used", files: ["case.json", "summary.json"],
+      a: "case.json in the result is the frozen case (parameters, mesh options, time settings). summary.json → input lists every parameter value, including the defaults.",
+      py: 's = json.load(open("results/pore_narrow/summary.json"))\ns["input"]' },
+    { q: "Restart or post-process in Python", files: ["solution.npz"],
+      a: "solution.npz has the full unknown vector U in the solver's layout, so you can rebuild the case with the same parameters and evaluate anything on it.",
+      py: 'U = np.load("results/pore_narrow/solution.npz")["U"]' },
+    { q: "Figures for a paper", files: ["figures/*.png", "svg/*.svg"],
+      a: "figures/ (300 dpi PNG) and svg/ (vector), in the house style, written automatically at the end of every run unless --no-plots." },
+  ];
+  let qSel = 3;
+  function renderFinder() {
+    $("#qs").replaceChildren(...QS.map((x, i) => el("button", { class: "q", type: "button", "aria-pressed": String(i === qSel), onclick: () => { qSel = i; renderFinder(); } }, x.q)));
+    const x = QS[qSel];
+    $("#answer").replaceChildren(
+      el("h3", {}, x.q),
+      el("p", {}, x.a),
+      el("div", { class: "writes", style: "margin:10px 0" }, x.files.map((p) => fileRef(p))),
+      x.py ? el("pre", { class: "peek", "aria-label": "Python" }, x.py) : null);
+  }
+
+  renderPipe(); renderNodes(); renderFile(); renderFinder();
+})();
+</script>
+</body>
+</html>

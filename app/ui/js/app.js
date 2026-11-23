@@ -3,7 +3,7 @@
 // (model tree + View/Data property editor) · canvas · document tabs · status bar.
 
 import { bridge, optional, inTauri } from "./bridge.js";
-import { h, $, $$, setChildren, fmt, store, debounce, placeholder, unitOf, stripUnit, sameValue, prettyName, isNum } from "./util.js";
+import { h, $, $$, setChildren, fmt, store, debounce, placeholder, unitOf, sameValue, prettyName, isNum } from "./util.js";
 import { icon } from "./icons.js";
 import { initColormaps, colormapNames, colormapType, colormapSource } from "./colormaps.js";
 import { prepareMesh, prepareTimeFields } from "./glfield.js";
@@ -11,6 +11,7 @@ import { FieldView, boundaryColor } from "./fieldview.js";
 import { resizeAll } from "./plots.js";
 import { runStatus, healthBadge, stageBars, RUNNING, STATE_WORD, isStale } from "./progress.js";
 import { renderStart, caseTitle, runStatusWord } from "./start.js";
+import { paramForm, rowsOf, STEP_LABEL } from "./params.js";
 import { renderGeometry, renderMesh, renderMaterials, renderBoundaries, renderEquations, renderStudy, updateStudy } from "./pages.js";
 import { renderResults, RESULT_VIEWS } from "./results.js";
 
@@ -31,6 +32,7 @@ const LATER = "Arrives with the project file (build plan, Phase 1 and 5)";
 // ---------------------------------------------------------------------------
 const S = {
   runs: [], runsLoaded: false, resultsDir: "",
+  projects: [], projectsLoaded: false, casesDir: "",
   cases: {}, casesLoaded: false, casesError: null,
   docs: [{ id: "start", kind: "start" }], active: "start",
   ptab: store.get("ptab", "data"),
@@ -57,7 +59,8 @@ app.paramRows = (doc) => {
   const dflt = c.params || {};
   const s = doc.summary || {};
   // a finished run reports its inputs; a running one is known from its launch command
-  const base = s.input || (doc.listing && doc.listing.launch_params ? Object.assign({}, dflt, doc.listing.launch_params) : {});
+  const base = doc.kind === "case" && doc.caseData ? Object.assign({}, dflt, doc.caseData.params || {})
+    : s.input || (doc.listing && doc.listing.launch_params ? Object.assign({}, dflt, doc.listing.launch_params) : {});
   const info = Object.assign({}, s.param_info || {}, c.info || {});
   const keys = [...new Set([...Object.keys(dflt), ...Object.keys(base)])];
   return keys.map((k) => {
@@ -96,7 +99,7 @@ app.canStop = (doc) => { const e = doc && app.entryOf(doc.name); return !!(e && 
 app.suggestName = (doc) => {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
-  return `${doc.case || "run"}_${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+  return `${doc.kind === "case" ? doc.caseName : doc.case || "run"}_${String(d.getFullYear()).slice(2)}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
 };
 
 /** Values that differ from the template defaults (what gets passed as --set). */
@@ -107,6 +110,10 @@ function changedParams(doc) {
 }
 
 app.commandLine = (doc, name) => {
+  if (doc.kind === "case") {
+    const env0 = { cpu: "JAX_PLATFORMS=cpu ", gpu: "JAX_PLATFORMS=cuda " }[app.device()] || "";
+    return `${env0}python run.py --case cases/${doc.caseName} --name ${name || "<name>"}`;
+  }
   const sets = Object.entries(changedParams(doc)).map(([k, v]) => ` --set ${k}=${typeof v === "string" ? v : JSON.stringify(v)}`).join("");
   const env = { cpu: "JAX_PLATFORMS=cpu ", gpu: "JAX_PLATFORMS=cuda " }[app.device()] || "";
   return `${env}python run.py ${doc.case} --name ${name || "<name>"}${sets}`;
@@ -240,6 +247,17 @@ function themeChanged() {
 // ---------------------------------------------------------------------------
 // Commands (menus, toolbar, keyboard and tooltips all read from here)
 // ---------------------------------------------------------------------------
+const caseOnly = () => { const d = app.activeDoc(); return d.kind === "case" ? true : d.kind === "run" ? "Mesh tools edit a case; open the run's case" : "Open a case first"; };
+function meshTool(tool, label, ic) {
+  return { label, icon: ic, enabled: caseOnly,
+    pressed: () => { const d = app.activeDoc(); return d.kind === "case" && d.wb === "mesh" && (d.meshTool || "pan") === tool; },
+    run: () => { const d = app.activeDoc(); if (d.wb !== "mesh") setWorkbench("mesh"); d.meshTool = tool; if (typeof d._onTool === "function") d._onTool(); renderToolbar(); } };
+}
+function focusMeshPanel(id, click = false) {
+  const d = app.activeDoc();
+  if (d.wb !== "mesh") setWorkbench("mesh");
+  requestAnimationFrame(() => { const el = document.getElementById(id); if (el) { el.scrollIntoView({ block: "center" }); if (click) el.click(); else el.focus(); } });
+}
 const fieldActive = () => { const d = app.activeDoc(); return d.kind !== "start" && d.wb === "results" && d.rview === "field" && app.field.mesh && app.field.docId === d.id; };
 const needField = () => (fieldActive() ? true : "Open Results, Field map first");
 const docOpen = () => (app.activeDoc().kind !== "start" ? true : "Open a template or a run first");
@@ -256,8 +274,18 @@ const CMD = {
     try { await navigator.clipboard.writeText(text); app.toast("Run command copied", "ok"); } catch { app.toast(text, "info"); }
   } },
   resetParams: { label: "Reset parameters to the template values", icon: "reset",
-    enabled: () => { const d = app.activeDoc(); return d.kind === "start" ? "Open a template or a run first" : Object.keys(d.edits || {}).length ? true : "No parameter has been changed"; },
-    run: () => { const d = app.activeDoc(); d.edits = {}; d.invalid = {}; renderProps(); renderCanvasIf(["study"]); status("Parameters reset to the run's values"); } },
+    enabled: () => {
+      const d = app.activeDoc();
+      if (d.kind === "start") return "Open a case first";
+      if (d.kind === "run") return "A result's inputs are fixed; open its case";
+      return app.paramRows(d).some((r) => r.changed) ? true : "Every parameter is at its template value";
+    },
+    run: () => {
+      const d = app.activeDoc();
+      d.edits = {}; d.invalid = {};
+      if (d.kind === "case") { d.caseData.params = Object.assign({}, app.caseOf(d).params || {}); app.caseChanged(d); }
+      renderProps(); renderWbTabs(); renderCanvas(); status("Parameters reset to the template values");
+    } },
   themeToggle: { label: "Switch dark / light theme", icon: "sun", key: "T", run: () => setThemePref(resolvedTheme() === "dark" ? "light" : "dark") },
   themeSystem: { label: "Follow the system theme", radio: () => S.themePref === "system", run: () => setThemePref("system") },
   themeDark: { label: "Dark", radio: () => S.themePref === "dark", run: () => setThemePref("dark") },
@@ -285,7 +313,12 @@ const CMD = {
   expert: { label: "Expert mode", icon: "sliders", key: "X", pressed: () => S.expert, run: () => setExpert(!S.expert) },
   help: { label: "Keyboard shortcuts", icon: "keyboard", key: "?", run: () => openHelp() },
   about: { label: "About pnpflow", icon: "info", run: () => openAbout() },
-  editData: { label: "Edit the template parameters", icon: "sliders", enabled: docOpen, run: () => app.setPropsTab("data") },
+  editData: { label: "Parameters of this step", icon: "sliders", enabled: docOpen, run: () => {
+    const d = app.activeDoc();
+    if (d.wb === "results") { app.setPropsTab("data"); return; }
+    const p = $("#step-params");
+    if (p) { p.scrollIntoView({ block: "start", behavior: "smooth" }); const i = p.querySelector("input"); if (i) i.focus({ preventScroll: true }); }
+  } },
   importGeo: { label: "Import CAD or mesh", icon: "import", enabled: () => LATER, run: () => {} },
   gmshScript: { label: "Edit gmsh script", icon: "script", enabled: () => LATER, run: () => {} },
   refine: { label: "Mesh sizes and refinement", icon: "sliders", enabled: () => LATER, run: () => {} },
@@ -293,7 +326,26 @@ const CMD = {
   addIon: { label: "Add an ion from the library", icon: "ion", enabled: () => LATER, run: () => {} },
   editBC: { label: "Set a boundary condition", icon: "electrode", enabled: () => LATER, run: () => {} },
   editPhysics: { label: "Choose physics (ions, flow)", icon: "equations", enabled: () => LATER, run: () => {} },
-  diagnose: { label: "Mesh views and diagnose", icon: "diagnose", enabled: docOpen, run: () => setWorkbench("mesh") },
+  diagnose: { label: "Mesh Validation", icon: "diagnose", enabled: docOpen, run: () => {
+    const d = app.activeDoc();
+    if (d.wb !== "mesh") setWorkbench("mesh");
+    requestAnimationFrame(() => { const b = $("#mesh-validation-bar"); if (b) { b.scrollIntoView({ block: "nearest" }); b.focus(); } });
+  } },
+  buildMesh: { label: "Create mesh (CPU, no solve)", icon: "mesh", enabled: () => {
+    const d = app.activeDoc();
+    if (d.kind !== "case") return d.kind === "run" ? "Results keep their mesh; open the case to remesh" : "Open a case first";
+    return d.caseDetail && d.caseDetail.mesh_status && d.caseDetail.mesh_status.state === "building" ? "The mesh is being created" : true;
+  }, run: () => app.buildMesh(app.activeDoc()) },
+  mtPan: meshTool("pan", "Pan and zoom the mesh", "hand"),
+  mtBox: meshTool("box", "Draw a refinement box", "box-region"),
+  mtDisk: meshTool("disk", "Draw a refinement disk", "disk-region"),
+  mtPaint: meshTool("paint", "Spray-paint finer elements", "spray"),
+  mtErase: meshTool("erase", "Erase painted spots and regions", "eraser"),
+  mtDensity: { label: "Global element density", icon: "sliders", enabled: caseOnly, run: () => focusMeshPanel("mt-density") },
+  mtBoundary: { label: "Refine along a boundary", icon: "boundary", enabled: caseOnly, run: () => focusMeshPanel("mt-boundary-add", true) },
+  mtCorners: { label: "Refine sharp corners", icon: "corner", enabled: caseOnly,
+    pressed: () => { const d = app.activeDoc(); return !!(d.caseData && d.caseData.mesh.corners.enabled); },
+    run: () => focusMeshPanel("mt-corners", true) },
 };
 for (const w of WB) CMD[`wb-${w.id}`] = { label: w.label, icon: w.icon, key: w.key, enabled: docOpen, run: () => setWorkbench(w.id) };
 for (const v of RESULT_VIEWS) {
@@ -417,6 +469,14 @@ function stepStatus(doc, wb) {
   switch (wb) {
     case "geometry": return { s: "done", why: `Template: ${caseTitle(doc.case)}` };
     case "mesh":
+      if (doc.kind === "case") {
+        const ms = (doc.caseDetail && doc.caseDetail.mesh_status) || {};
+        if (ms.state === "building") return { s: "running", why: "Building the mesh" };
+        if (ms.state === "failed") return { s: "error", why: `Mesh build failed: ${ms.error || ""}` };
+        if (ms.state !== "done") return { s: "todo", why: "Not created yet: Create mesh, or Solve creates it" };
+        if (!ms.up_to_date) return { s: "warn", why: "Out of date: settings changed since it was built; it is rebuilt when you solve" };
+        return { s: "done", why: `${fmt((ms.stats || {}).n_elements)} elements, up to date` };
+      }
       if (draft || !s) return { s: "none", why: "Built by gmsh when you solve" };
       if (worst(diag) === "fail") return { s: "error", why: "Mesh diagnose has failures" };
       if (worst(diag) === "warn") return { s: "warn", why: "Mesh diagnose has warnings" };
@@ -464,8 +524,8 @@ function renderWbTabs() {
 
 const TOOLBARS = {
   start: ["new", "open", "refresh", "|", "themeToggle", "help"],
-  geometry: ["editData", "importGeo", "gmshScript", "|", "wb-boundaries", "diagnose"],
-  mesh: ["diagnose", "meshOnField", "refine"],
+  geometry: ["editData", "importGeo", "gmshScript", "|", "buildMesh", "wb-boundaries", "diagnose"],
+  mesh: ["buildMesh", "|", "mtPan", "mtBox", "mtDisk", "mtPaint", "mtErase", "|", "mtDensity", "mtBoundary", "mtCorners", "|", "diagnose", "meshOnField"],
   materials: ["addIon", "units", "editData"],
   boundaries: ["editBC", "diagnose"],
   equations: ["editPhysics", "editData"],
@@ -527,6 +587,15 @@ function treeData(d) {
     flow && flow !== "none" ? { id: "e-f", label: flow === "navier_stokes" ? "Navier–Stokes" : "Stokes", icon: "flow", wb: "equations" } : null].filter(Boolean) : [];
   const st = app.statusOf(d);
   kids.study = [{ id: "st-run", label: d.name ? d.name : "Not solved yet", icon: d.name ? "play" : "study", wb: "study", meta: st ? (st.running ? STATE_WORD[st.state] : runStatusWord(app.entryOf(d.name) || { state: st.state }).text) : "", muted: !d.name }];
+  if (d.kind === "case" && d.caseDetail) {
+    const runs = (d.caseDetail.run_entries || []).slice().sort((a, b) => b.mtime - a.mtime);
+    kids.study = runs.length ? runs.map((r) => ({ id: `run-${r.name}`, label: r.name, icon: r.name === d.name ? "play" : "results", wb: "results", run: r.name,
+      meta: runStatusWord(app.entryOf(r.name) || r).text })) : [{ id: "st-run", label: "No runs yet", icon: "study", wb: "study", muted: true }];
+    const ms = d.caseDetail.mesh_status || {};
+    if (ms.state === "done") kids.mesh = [{ id: "m-el", label: "Elements", icon: "mesh", meta: fmt((ms.stats || {}).n_elements), wb: "mesh" },
+      { id: "m-state", label: ms.up_to_date ? "Up to date" : "Out of date", icon: ms.up_to_date ? "check" : "alert", wb: "mesh" }];
+    else kids.mesh = [{ id: "m-none", label: ms.state === "building" ? "Building…" : "Not built yet", icon: "mesh", wb: "mesh", muted: true }];
+  }
   const nChecks = Array.isArray(s.checks) ? s.checks.length : 0;
   kids.results = d.name ? RESULT_VIEWS.map((v) => ({ id: `rv-${v.id}`, label: v.label, icon: v.icon, wb: "results", rview: v.id,
     meta: v.id === "checks" && nChecks ? String(nChecks) : v.id === "figures" && d.listing ? String((d.listing.figures || []).length + (d.listing.plots || []).length) : "",
@@ -540,7 +609,7 @@ function treeData(d) {
 function renderTree() {
   const d = app.activeDoc();
   const root = $("#tree");
-  $("#combo-doc").textContent = d.kind === "start" ? "" : d.name || `new ${d.case}`;
+  $("#combo-doc").textContent = docLabel(d);
   const exp = d.expanded || (d.expanded = new Set(["boundaries", "results", "materials"]));
   const sel = d.kind === "start" ? null : d.treeSel || d.wb;
   const nodes = [];
@@ -585,6 +654,7 @@ function toggleNode(d, id) {
 function activateNode(d, n, depth) {
   if (d.kind === "start") { status("Open a template or a run first"); return; }
   d.treeSel = depth ? n.id : null;
+  if (n.run && d.kind === "case") { app.showCaseRun(d, n.run).then(() => app.setResultsView(d.rview || "field")); return; }
   if (n.rview) app.setResultsView(n.rview);
   else if (n.wb) setWorkbench(n.wb, { keepTree: true });
   renderTree();
@@ -626,7 +696,12 @@ function prow(name, control, { changed = false, info = "", plain = true, err = "
 function renderProps() {
   for (const b of $$(".ptab")) b.setAttribute("aria-selected", String(b.dataset.tab === S.ptab));
   const d = app.activeDoc();
+  // Construction steps edit their own parameters on the page, so the panel under the
+  // tree is hidden there and the tree gets the full height.
+  const off = d.kind !== "start" && d.wb !== "results";
+  $("#combo").classList.toggle("props-off", off);
   const body = $("#props-body");
+  if (off) { setChildren(body, null); return; }   // no hidden second copy of the editors
   $("#props-title").textContent = S.ptab === "data" ? "Parameters" : "Display";
   $("#props-sub").textContent = d.kind === "start" ? "" : caseTitle(d.case);
   if (d.kind === "start") {
@@ -637,85 +712,44 @@ function renderProps() {
   else renderViewTab(d, body);
 }
 
-function parseParam(raw, dflt) {
-  if (typeof dflt === "boolean") return { ok: true, v: raw };
-  if (typeof dflt === "string") return { ok: true, v: raw };
-  const t = String(raw).trim();
-  let v;
-  try { v = JSON.parse(t); } catch { v = NaN; }
-  if (typeof dflt === "number" || dflt === undefined) {
-    if (typeof v === "number" && Number.isFinite(v)) return { ok: true, v };
-    return { ok: false, err: "Enter a number, for example 0.1 or 2.5e-3" };
-  }
-  return t ? { ok: true, v: Number.isNaN(v) ? t : v } : { ok: false, err: "Enter a value" };
-}
-
 function renderDataTab(d, body) {
   const rows = app.paramRows(d);
   if (!S.casesLoaded && !rows.length) { setChildren(body, h("div.pempty", {}, h("div.spinner"), " Loading the template parameters…")); return; }
-  d.invalid = d.invalid || {};
   const nChanged = rows.filter((r) => r.changed).length;
-  const items = rows.map((r) => {
-    let control;
-    if (typeof r.dflt === "boolean" || typeof r.value === "boolean") {
-      control = h("label.chk", {}, h("input", { type: "checkbox", checked: !!r.value, "aria-label": r.key, onchange: (e) => setParam(d, r.key, e.target.checked) }), h("span", { text: r.value ? "on" : "off" }));
-    } else {
-      const inp = h("input.inp", { type: "text", spellcheck: "false", inputmode: typeof r.dflt === "number" ? "decimal" : null, id: `p-${r.key}`,
-        value: d.invalid[r.key] !== undefined ? d.invalid[r.key].raw : typeof r.value === "string" ? r.value : JSON.stringify(r.value),
-        class: [r.unit ? "has-unit" : "", r.changed ? "changed" : "", d.invalid[r.key] ? "invalid" : ""].join(" "),
-        "aria-invalid": d.invalid[r.key] ? "true" : null, "aria-describedby": d.invalid[r.key] ? `perr-${r.key}` : null,
-        onchange: (e) => setParam(d, r.key, e.target.value, true),
-        onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { e.target.value = JSON.stringify(r.value); e.target.blur(); } } });
-      control = h("span.field-wrap", {}, inp, r.unit ? h("span.unit", { text: r.unit }) : null);
-    }
-    const reset = r.changed || r.edited ? h("button.icon-btn", { type: "button", "aria-label": `Reset ${r.key} to ${fmt(r.dflt)}`, "data-tip-title": `Reset to the template value ${fmt(r.dflt)}`, onclick: () => resetParam(d, r.key) }, icon("reset", 14)) : null;
-    const row = prow(r.key, [control, reset], { changed: r.changed, plain: false, info: S.expert ? "" : stripUnit(r.info), err: d.invalid[r.key] ? d.invalid[r.key].err : "" });
-    row.querySelector(".pname").setAttribute("for", `p-${r.key}`);
-    if (S.expert && r.info) row.querySelector(".pname").dataset.tip = r.info;
-    const perr = row.querySelector(".perr");
-    if (perr) perr.id = `perr-${r.key}`;
-    return row;
-  });
+  // grouped by the step that owns each parameter; each step page edits the same values
+  const groups = Object.keys(STEP_LABEL).map((step) => [step, rowsOf(app, d, step)]).filter(([, r]) => r.length);
   const derived = d.summary && d.summary.params ? Object.entries(d.summary.params) : [];
   setChildren(body,
     h("div.pgroup", {}, h("span", { text: d.name ? `Inputs of ${d.name}` : "Template parameters" }),
       nChanged ? h("span.badge.b-warn", { style: { height: "18px" } }, `${nChanged} changed`) : null,
       h("button.btn-link", { type: "button", disabled: !Object.keys(d.edits).length || null, onclick: () => runCmd("resetParams") }, "Reset all")),
-    rows.length ? items : h("div.pempty", { text: S.casesError ? `Template parameters unavailable: ${S.casesError}` : "This template has no parameters." }),
+    rows.length ? groups.map(([step, r]) => [
+      h("div.pgroup.psub", {}, h("button.btn-link", { type: "button", "data-tip": `Open the ${STEP_LABEL[step]} page`, onclick: () => setWorkbench(step) }, STEP_LABEL[step])),
+      paramForm(app, d, r, { layout: "panel", expert: S.expert, readonly: d.kind === "run" })])
+      : h("div.pempty", { text: S.casesError ? `Template parameters unavailable: ${S.casesError}` : "This template has no parameters." }),
     S.expert && derived.length ? [h("div.pgroup", { text: "Model parameters (dimensionless, from the run)" }),
       derived.map(([k, v]) => prow(k, h("input.inp", { readonly: true, value: fmt(v, 6), "aria-label": k }), { plain: false }))] : null,
     h("div.pnote", {}, S.units === "SI" ? "Values are shown as the template defines them; units in the fields come from the template's help text." : "Dimensionless display is a preview: conversion arrives with the project file. Values are shown as the template defines them."));
 }
 
-function setParam(d, k, raw, fromText = false) {
-  const r = app.paramRows(d).find((x) => x.key === k);
-  const p = fromText ? parseParam(raw, r ? r.dflt : undefined) : { ok: true, v: raw };
-  if (!p.ok) {
-    d.invalid[k] = { raw, err: p.err };
-  } else {
-    delete d.invalid[k];
-    const base = d.summary && d.summary.input && k in d.summary.input ? d.summary.input[k] : r ? r.dflt : undefined;
-    if (sameValue(p.v, base)) delete d.edits[k]; else d.edits[k] = p.v;
+/** Called after any parameter edit (step pages or the Data tab). */
+app.paramsChanged = (d) => {
+  if (d.kind === "case" && d.caseData) {
+    // edits go straight into case.json (saved shortly after the last change)
+    d.caseData.params = d.caseData.params || {};
+    for (const [k, v] of Object.entries(d.edits)) d.caseData.params[k] = v;
+    d.edits = {};
+    app.caseChanged(d);
   }
-  renderProps();
   renderWbTabs();
-  renderCanvasIf(["study"]);
   renderToolbar();
-  const el = $(`#p-${CSS.escape(k)}`);
-  if (el && !p.ok) el.focus();
-}
-
-function resetParam(d, k) {
-  const r = app.paramRows(d).find((x) => x.key === k);
-  delete d.invalid[k];
-  if (r && r.dflt !== undefined) {
-    const base = d.summary && d.summary.input && k in d.summary.input ? d.summary.input[k] : r.dflt;
-    if (sameValue(base, r.dflt)) delete d.edits[k]; else d.edits[k] = r.dflt;
-  } else delete d.edits[k];
-  renderProps();
-  renderCanvasIf(["study"]);
-  renderToolbar();
-}
+  for (const b of $$(".step-count")) {
+    const n = rowsOf(app, d, b.dataset.step).filter((r) => r.changed).length;
+    b.hidden = !n;
+    b.textContent = `${n} changed`;
+  }
+  if (typeof d._onParams === "function" && d.wb === "study") d._onParams();
+};
 
 function renderViewTab(d, body) {
   const fv = app.field;
@@ -793,13 +827,157 @@ app.openRun = async (name, { wb = null, rview = null } = {}) => {
   }
 };
 
-app.openTemplate = (caseName) => {
-  const d = newDoc({ kind: "draft", case: caseName, wb: "study" });
-  d.nextName = app.suggestName(d);
-  S.docs.push(d);
-  activate(d.id);
-  status(`New project from the template ${caseTitle(caseName)}. Check the parameters in the Data tab, then press Solve (F8).`);
-  if (S.ptab !== "data") app.setPropsTab("data");
+function docLabel(d) {
+  if (d.kind === "start") return "";
+  if (d.kind === "case") return d.caseName;
+  return d.name || `new ${d.case}`;
+}
+
+const DEFAULT_MESH = { density: 1, boundaries: [], regions: [], corners: { enabled: false, size: 0, radius: 0, max_angle: 80 }, paint: [], paint_growth: 1.2 };
+const DEFAULT_TIME = { save: { mode: "template", dtau: 0.05, n: 20, tau_min: 1e-4, list: [] }, dt_max: null, max_rejects: 12 };
+
+/** Fill missing blocks of a case.json (same defaults as pnpflow/project.py). */
+function normalizeCase(c) {
+  c = Object.assign({ params: {}, units: {}, figures: { standard: true } }, c || {});
+  c.mesh = Object.assign(structuredClone(DEFAULT_MESH), c.mesh || {});
+  c.mesh.corners = Object.assign(structuredClone(DEFAULT_MESH.corners), (c.mesh && c.mesh.corners) || {});
+  c.time = Object.assign(structuredClone(DEFAULT_TIME), c.time || {});
+  c.time.save = Object.assign(structuredClone(DEFAULT_TIME.save), (c.time && c.time.save) || {});
+  return c;
+}
+app.normalizeCase = normalizeCase;
+
+function uniqueCaseName(base) {
+  const taken = new Set(S.projects.map((p) => p.name));
+  for (let i = 1; i < 1000; i++) { const n = `${base}_${i}`; if (!taken.has(n)) return n; }
+  return `${base}_${Date.now()}`;
+}
+
+/** New case from a template (or from a run's inputs): case.json is written at once. */
+app.newCase = async (template, { params = null, name = null, from = "" } = {}) => {
+  const c = S.cases[template];
+  if (!c) { app.toast(`Template '${template}' is not available from run.py`, "error"); return; }
+  name = name || uniqueCaseName(template);
+  const data = normalizeCase({ template, description: from, params: Object.assign({}, c.params || {}, params || {}) });
+  try {
+    await bridge.saveCase(name, data, true);
+  } catch (e) {
+    app.toast(`Could not create the case: ${e.message}`, "error");
+    return;
+  }
+  await refreshProjects();
+  await app.openCase(name, { wb: "geometry" });
+  status(`New case '${name}' (cases/${name}/case.json). Each step holds its own settings; press Create mesh to check the mesh, then Solve (F8).`);
+};
+app.openTemplate = (template) => app.newCase(template);
+
+app.openCase = async (name, { wb = null, run = null } = {}) => {
+  let d = S.docs.find((x) => x.kind === "case" && x.caseName === name);
+  if (!d) {
+    d = newDoc({ kind: "case", caseName: name, wb: wb || "geometry" });
+    S.docs.push(d);
+    activate(d.id);
+    await loadCaseData(d, { run });
+  } else {
+    if (wb) d.wb = wb;
+    activate(d.id);
+    if (run && run !== d.name) await app.showCaseRun(d, run);
+  }
+  return d;
+};
+
+/** Load case.json, mesh status and runs; the document shows its newest run's results. */
+async function loadCaseData(d, { run = null, quiet = false } = {}) {
+  if (!quiet) { d.loading = true; if (S.active === d.id) renderCanvas(); }
+  try {
+    const det = await bridge.caseDetail(d.caseName);
+    const prevKey = d.caseDetail && d.caseDetail.mesh_status && `${d.caseDetail.mesh_status.state}:${d.caseDetail.mesh_status.finished}`;
+    d.caseDetail = det;
+    if (!d.saveTimer && !d.saving) d.caseData = normalizeCase(det.case);
+    d.case = d.caseData.template;
+    const newKey = det.mesh_status && `${det.mesh_status.state}:${det.mesh_status.finished}`;
+    if (newKey !== prevKey) { d.caseMesh = null; d.caseValidation = undefined; }
+    const runs = (det.run_entries || []).slice().sort((a, b) => b.mtime - a.mtime);
+    const pick = run || d.name || (runs[0] && runs[0].name) || null;
+    d.error = null;
+    d.loading = false;
+    if (pick && pick !== d.name) await app.showCaseRun(d, pick, { render: false });
+  } catch (e) {
+    d.error = e.status === 404 ? `The case '${d.caseName}' was not found in the cases folder.` : e.message;
+    d.loading = false;
+  }
+  if (S.active === d.id) renderAll();
+}
+app.loadCaseData = loadCaseData;
+
+/** Point a case document at one of its runs (its Results, Study status). */
+app.showCaseRun = async (d, run, { render = true } = {}) => {
+  Object.assign(d, { name: run, summary: null, progress: null, profiles: null, diagnose: null, listing: null,
+    fieldsJSON: null, mesh: null, fieldsStamp: null, timeJSON: null, timePromise: null });
+  if (app.field.docId === d.id) app.field.docId = null;
+  const e = app.entryOf(run);
+  d.wasRunning = !!(e && RUNNING.has(e.state));
+  await loadRunData(d, { quiet: true });
+  if (render && S.active === d.id) { renderAll(); syncURL(); }
+};
+
+/** Save case.json shortly after the last change (and refresh the mesh state). */
+app.caseChanged = (d) => {
+  if (d.kind !== "case") return;
+  d.dirty = true;
+  clearTimeout(d.saveTimer);
+  d.saveTimer = setTimeout(() => saveCaseNow(d), 450);
+  renderStatusbar();
+};
+async function saveCaseNow(d) {
+  clearTimeout(d.saveTimer);
+  d.saveTimer = null;
+  if (!d.dirty) return;
+  d.saving = true;
+  d.dirty = false;
+  try {
+    const r = await bridge.saveCase(d.caseName, d.caseData);
+    if (r && r.case && !d.dirty) d.caseData = normalizeCase(r.case);
+    d.saveError = null;
+  } catch (e) {
+    d.saveError = e.message;
+    d.dirty = true;
+    app.toast(`Could not save case.json: ${e.message}`, "error");
+  }
+  d.saving = false;
+  // the mesh may now be out of date
+  try {
+    const det = await bridge.caseDetail(d.caseName);
+    d.caseDetail = det;
+  } catch { /* keep the old state */ }
+  renderWbTabs();
+  renderTree();
+  renderStatusbar();
+  if (typeof d._onCaseSaved === "function") d._onCaseSaved();
+}
+app.saveCaseNow = saveCaseNow;
+
+app.buildMesh = async (d) => {
+  if (d.kind !== "case") return;
+  await saveCaseNow(d);
+  try {
+    await bridge.buildMesh(d.caseName, "cpu");
+    status(`Creating the mesh of ${d.caseName} on the CPU…`);
+  } catch (e) {
+    app.toast(`Could not start the mesh build: ${e.message}`, "error");
+    return;
+  }
+  d.caseDetail = await bridge.caseDetail(d.caseName).catch(() => d.caseDetail);
+  d.meshBuilding = true;
+  renderAll();
+};
+
+/** A run document: open its case, or make a new case from its inputs. */
+app.caseOfRun = async (d) => {
+  const proj = (d.listing && d.listing.project) || (app.entryOf(d.name) || {}).project;
+  if (proj) return app.openCase(proj, { wb: "study" });
+  const inputs = d.summary && d.summary.input;
+  return app.newCase(d.case, { params: inputs, from: `made from the inputs of run ${d.name}` });
 };
 
 function activate(id) {
@@ -826,12 +1004,14 @@ async function loadRunData(d, { quiet = false } = {}) {
   try {
     const listing = await bridge.listing(d.name);
     const has = (f) => listing.files && listing.files[f];
-    const [summary, progress, profiles, diagnose] = await Promise.all([
+    const [summary, progress, profiles, diagnose, runCase] = await Promise.all([
       has("summary.json") ? optional(bridge.json(d.name, "summary.json")) : null,
       has("progress.json") ? optional(bridge.json(d.name, "progress.json")) : null,
       has("profiles.json") ? optional(bridge.json(d.name, "profiles.json")) : null,
       (listing.mesh_files || []).includes("mesh/diagnose.json") ? optional(bridge.json(d.name, "mesh/diagnose.json")) : null,
+      has("case.json") ? optional(bridge.json(d.name, "case.json")) : null,
     ]);
+    d.runCase = runCase;
     const fStamp = has("fields.json") ? `${listing.files["fields.json"].mtime}:${listing.files["fields.json"].size}` : null;
     if (fStamp !== d.fieldsStamp) { d.timeJSON = null; d.timePromise = null; d.fieldsJSON = null; d.mesh = null; d.fieldsStamp = fStamp; if (app.field.docId === d.id) app.field.docId = null; }
     Object.assign(d, { listing, summary, progress, profiles, diagnose, error: null });
@@ -910,7 +1090,7 @@ function renderCanvas() {
   const root = $("#canvas");
   if (app.fieldHost.parentNode) app.fieldHost.remove();
   if (d.kind === "start") { S.startSig = startSignature(); renderStart(app, root); return; }
-  if (d.loading && !d.listing) { setChildren(root, h("div.page", {}, placeholder("loading", `Opening ${d.name}…`))); return; }
+  if (d.loading && !d.listing) { setChildren(root, h("div.page", {}, placeholder("loading", `Opening ${docLabel(d)}…`))); return; }
   if (d.error) {
     setChildren(root, h("div.page", {}, placeholder("error", "Could not open the run", d.error,
       h("button.btn.sm", { type: "button", onclick: () => loadRunData(d) }, icon("refresh", 14), "Try again"))));
@@ -921,16 +1101,18 @@ function renderCanvas() {
   requestAnimationFrame(() => resizeAll(root));
 }
 app.renderCanvas = renderCanvas;
+app.renderToolbarNow = () => renderToolbar();
+app.rerenderStart = () => { if (app.activeDoc().kind === "start") renderCanvas(); };
 
 function renderDocTabs() {
   const bar = $("#doc-tabs");
   setChildren(bar, S.docs.map((d) => {
     const sel = d.id === S.active;
-    const label = d.kind === "start" ? "Start" : d.name || `new ${d.case}`;
+    const label = d.kind === "start" ? "Start" : docLabel(d);
     const st = d.kind === "start" ? null : app.statusOf(d);
     const tab = h("div.dtab", {
       role: "tab", tabindex: sel ? "0" : "-1", "aria-selected": String(sel), class: d.kind === "start" ? "start" : "",
-      "data-tip-title": d.kind === "start" ? "Start page" : label, "data-tip": d.kind === "start" ? "Templates, recent runs and examples" : d.name ? `Run of ${caseTitle(d.case)}` : `Unsaved project from ${caseTitle(d.case)}`,
+      "data-tip-title": d.kind === "start" ? "Start page" : label, "data-tip": d.kind === "start" ? "Cases, templates, recent runs and examples" : d.kind === "case" ? `Case from ${caseTitle(d.case)}${d.name ? `; showing run ${d.name}` : ""}` : `Result of ${caseTitle(d.case)}${d.listing && d.listing.project ? `, case ${d.listing.project}` : ""}`,
       onclick: (e) => { if (!e.target.closest(".icon-btn")) activate(d.id); },
       onkeydown: (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(d.id); }
@@ -941,7 +1123,7 @@ function renderDocTabs() {
           requestAnimationFrame(() => { const t = $('.dtab[aria-selected="true"]'); if (t) t.focus(); });
         } else if (e.key === "Delete" && d.kind !== "start") closeDoc(d.id);
       },
-    }, d.kind === "start" ? icon("inbox", 14) : st && st.running ? h("span.sdot.s-running") : icon(d.name ? "results" : "file-plus", 14),
+    }, d.kind === "start" ? icon("inbox", 14) : st && st.running ? h("span.sdot.s-running") : icon(d.kind === "case" ? "folder-open" : "results", 14),
     h("span.dt-name", { text: label }),
     d.kind === "start" ? null : h("button.icon-btn", { type: "button", "aria-label": `Close ${label}`, tabindex: "-1", onclick: () => closeDoc(d.id) }, icon("x", 12)));
     return tab;
@@ -984,6 +1166,10 @@ function renderStatusbar() {
       stageBars(st),
       healthBadge(st),
       h("span.sb-res", { "data-tip-title": "Last residual", "data-tip": "Norm of the nonlinear residual after the last Newton iteration" }, "‖R‖ ", h("b", { text: st.resNorm !== null ? fmt(st.resNorm, 2) : "–" })));
+  }
+  if (d.kind === "case") {
+    const saveTxt = d.saveError ? "case.json not saved" : d.dirty || d.saving ? "saving case.json…" : "case.json saved";
+    $("#sb-run").prepend(h("span.sb-save", { class: d.saveError ? "bad" : "", "data-tip": `cases/${d.caseName}/case.json${d.saveError ? `: ${d.saveError}` : ""}` }, icon(d.saveError ? "alert" : "check", 12), saveTxt));
   }
   const seg = (items, value, onPick, label) => h("span.seg", { role: "group", "aria-label": label },
     items.map(([v, t, tipText]) => h("button", { type: "button", "aria-pressed": String(v === value), "data-tip": tipText, onclick: () => onPick(v) }, t)));
@@ -1036,15 +1222,32 @@ app.solve = async (d, { name, overwrite, msgEl } = {}) => {
     if (msgEl && msgEl.isConnected) setChildren(msgEl, h(`div.msg.msg-${kind}`, {}, icon(kind === "error" ? "x-circle" : kind === "ok" ? "check-circle" : "info", 14), h("span", { text })));
     else app.toast(text, kind === "error" ? "error" : kind);
   };
+  if (d.kind === "run") { await app.caseOfRun(d); return; }
+  if (!d.case || !S.cases[d.case]) return say("error", d.case ? `Template '${d.case}' is not available from run.py.` : "This document has no template (case) yet. Wait for the run to load or open a template from the Start page.");
   if (d.invalid && Object.keys(d.invalid).length) return say("error", `Fix the highlighted parameters first: ${Object.keys(d.invalid).join(", ")}.`);
   name = (name || d.nextName || app.suggestName(d)).trim();
   if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(name)) return say("error", "Run names use letters, digits, '_', '.' and '-' only, and start with a letter, digit or '_'.");
   say("info", `Starting ${name}…`);
   try {
-    await bridge.launch({ case: d.case, name, params: changedParams(d), overwrite: !!(overwrite ?? d.overwrite), device: app.device() });
+    if (d.kind === "case") {
+      await saveCaseNow(d);
+      await bridge.runCase(d.caseName, { name, overwrite: !!(overwrite ?? d.overwrite), device: app.device() });
+    } else {
+      await bridge.launch({ case: d.case, name, params: changedParams(d), overwrite: !!(overwrite ?? d.overwrite), device: app.device() });
+    }
   } catch (e) {
     const exists = /exists/.test(e.message);
     return say("error", exists ? `A run called '${name}' already exists. Choose another name or tick "Replace an existing run".` : `Could not start the run: ${e.message}`);
+  }
+  if (d.kind === "case") {
+    d.nextName = null;
+    await refreshRuns();
+    await app.showCaseRun(d, name, { render: false });
+    d.wb = "study";
+    d.wasRunning = true;
+    status(`Started ${name} (cases/${d.caseName}/results/${name})`);
+    renderAll(); syncURL();
+    return;
   }
   // the document now follows the new run: a draft becomes the run; a run document
   // that is solved again opens the new run in its own tab
@@ -1076,7 +1279,18 @@ function startSignature() {
   return S.runs.map((r) => `${r.name}:${r.state}:${r.converged}:${r.thumb}:${r.checks}`).join("|") + `#${Object.keys(S.cases).length}`;
 }
 
+async function refreshProjects() {
+  try {
+    const r = await bridge.caseList();
+    S.projects = r.cases || [];
+    S.casesDir = r.dir || S.casesDir;
+    S.projectsLoaded = true;
+  } catch { /* the run list reports the connection state */ }
+}
+app.refreshProjects = refreshProjects;
+
 async function refreshRuns() {
+  refreshProjects();
   try {
     const r = await bridge.runs();
     S.runs = r.runs || [];
@@ -1121,6 +1335,22 @@ async function poll() {
     if (ok && S.active === d.id && d.wb === "study") { d.wb = "results"; d.rview = "field"; }
     if (S.active === d.id) { renderAll(); syncURL(); }
   }
+  // mesh builds of open cases
+  for (const d of S.docs) {
+    if (d.kind !== "case") continue;
+    const building = d.caseDetail && d.caseDetail.mesh_status && d.caseDetail.mesh_status.state === "building";
+    if (!building && !d.meshBuilding) continue;
+    const det = await bridge.caseDetail(d.caseName).catch(() => null);
+    if (!det) continue;
+    d.caseDetail = det;
+    if (det.mesh_status.state !== "building") {
+      d.meshBuilding = false;
+      d.caseMesh = null; d.caseValidation = undefined;
+      const ok = det.mesh_status.state === "done";
+      app.toast(ok ? `Mesh of ${d.caseName} built: ${fmt((det.mesh_status.stats || {}).n_elements)} elements` : `Mesh build of ${d.caseName} failed: ${det.mesh_status.error || "see mesh.log"}`, ok ? "ok" : "error");
+      if (S.active === d.id) renderAll();
+    } else if (S.active === d.id && d.wb === "mesh" && typeof d._onMeshPoll === "function") d._onMeshPoll();
+  }
   // live updates without rebuilding the canvas
   const a = app.activeDoc();
   if (a.kind === "start") { if (startSignature() !== S.startSig) renderCanvas(); }
@@ -1134,7 +1364,8 @@ async function poll() {
 async function refreshAll(user = false) {
   await refreshRuns();
   const d = app.activeDoc();
-  if (d.name) await loadRunData(d, { quiet: true });
+  if (d.kind === "case") await loadCaseData(d, { quiet: true });
+  else if (d.name) await loadRunData(d, { quiet: true });
   if (user) { await app.loadCases(true); status("Runs refreshed"); }
   renderAll();
 }
@@ -1154,9 +1385,10 @@ app.loadCases = async (force = false) => {
 function syncURL() {
   const d = app.activeDoc();
   const u = new URL(location.href);
-  for (const k of ["run", "wb", "view", "new", "doc"]) u.searchParams.delete(k);
+  for (const k of ["run", "wb", "view", "new", "doc", "case"]) u.searchParams.delete(k);
   if (d.kind !== "start") {
-    if (d.name) u.searchParams.set("run", d.name); else u.searchParams.set("new", d.case);
+    if (d.kind === "case") u.searchParams.set("case", d.caseName);
+    else if (d.name) u.searchParams.set("run", d.name); else u.searchParams.set("new", d.case);
     u.searchParams.set("wb", d.wb);
     if (d.wb === "results") u.searchParams.set("view", d.rview);
   }
@@ -1169,7 +1401,10 @@ async function applyURL() {
   if (q.get("ptab") === "view" || q.get("ptab") === "data") S.ptab = q.get("ptab");
   const wb = WB.some((w) => w.id === q.get("wb")) ? q.get("wb") : null;
   const view = RESULT_VIEWS.some((v) => v.id === q.get("view")) ? q.get("view") : null;
-  if (q.get("run")) await app.openRun(q.get("run"), { wb: wb || (view ? "results" : null), rview: view });
+  if (q.get("case")) {
+    const d = await app.openCase(q.get("case"), { wb: wb || (view ? "results" : null) });
+    if (d && view) d.rview = view;
+  } else if (q.get("run")) await app.openRun(q.get("run"), { wb: wb || (view ? "results" : null), rview: view });
   else if (q.get("new")) {
     app.openTemplate(q.get("new"));
     if (wb) setWorkbench(wb);

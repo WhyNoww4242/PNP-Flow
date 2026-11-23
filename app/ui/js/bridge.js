@@ -85,6 +85,20 @@ const httpBridge = {
     const data = r.ok ? parseLoose(await r.text()) : {};
     return { cases: data || {}, error: r.headers.get("X-Cases-Error") || (r.ok ? null : r.statusText) };
   },
+  // cases (cases/<case>/case.json + mesh/ + results/)
+  caseList: () => getJSON("/api/caselist"),
+  caseDetail: (name) => getJSON(`/api/case/${enc(name)}`),
+  caseJSON: (name, path) => getJSON(`/api/case/${enc(name)}/file/${path.split("/").map(enc).join("/")}`),
+  caseFileURL: async (name, path) => `/api/case/${enc(name)}/file/${path.split("/").map(enc).join("/")}`,
+  saveCase: (name, kase, create = false) => getJSON(`/api/case/${enc(name)}/save`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ case: kase, create }),
+  }),
+  buildMesh: (name, device) => getJSON(`/api/case/${enc(name)}/mesh`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device }),
+  }),
+  runCase: (name, body) => getJSON(`/api/case/${enc(name)}/run`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }),
   launch: (body) => getJSON("/api/launch", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   }),
@@ -120,6 +134,14 @@ const tauriBridge = {
       return { cases: {}, error: e.message };
     }
   },
+  // cases are not wired into the desktop shell yet (app/src-tauri): browser dev server only
+  caseList: async () => ({ cases: [], dir: "", unsupported: true }),
+  caseDetail: async () => { throw httpError(501, "cases need the dev server (python app/server.py) for now"); },
+  caseJSON: async () => { throw httpError(501, "cases need the dev server for now"); },
+  caseFileURL: async () => "",
+  saveCase: async () => { throw httpError(501, "cases need the dev server (python app/server.py) for now"); },
+  buildMesh: async () => { throw httpError(501, "cases need the dev server for now"); },
+  runCase: async () => { throw httpError(501, "cases need the dev server for now"); },
   launch: (body) => call("launch_run", { request: body }),
   // the Tauri launcher does not pass a device yet: JAX picks (GPU when present)
   devices: async () => ({ gpu: false, devices: [], error: "device choice is not wired into the desktop shell yet" }),

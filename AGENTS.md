@@ -33,7 +33,7 @@ Goals:
 | Desktop app (`app/`) | **Rust + Tauri 2**, web front end | first version runs in a browser (`python app/server.py`, port 8766); Tauri shell written, not compiled |
 | MCP server (`pnpflow/mcp`) | Python `mcp` SDK | specified (`docs/MCP.md`), not started |
 | Time stepping (`pnpflow/transient.py`) | Python + JAX | variable-step BDF2, checked (order 2.1, `tools/check_transient.py`) |
-| Project file + generic case | JSON | not started — next step |
+| Cases (`pnpflow/project.py`) | JSON | `cases/<case>/case.json` = template + parameters + mesh options + time settings; mesh built and reused per case; runs in `cases/<case>/results/` (2026-11-22). Generic (template-free) case not started |
 
 ## 2. Physics (nondimensional, steady)
 
@@ -75,8 +75,20 @@ Details, discretisation and BC table: `docs/THEORY.md`.
    `Newton` is reused. A case asks for it with `Setup.transient` (t_end, output times,
    profile/figure callbacks); `runner._run_transient` writes profiles at each output time,
    `summary.transient`, `solution.npz` (`t`, `U_t`) and live `progress.time`.
-8. **Output** (`output.py`, `runner.py`): `results/<run>/` with `progress.json` (live),
-   `summary.json`, `fields.json`, `profiles.json`, `plots/*.png`, `solution.{vtu,msh,npz}`.
+8. **Output** (`output.py`, `runner.py`): the run folder with `progress.json` (live),
+   `summary.json`, `fields.json`, `profiles.json`, `plots/*.png`, `solution.{vtu,msh,npz}`,
+   `convergence.txt` (every Newton stage / time step, then the checks; `project.convergence_text`).
+9. **Cases** (`project.py`, `runner.run_from_case`, `runner.build_case_mesh`): a case is
+   `cases/<case>/case.json` (template, `params`, display `units`, `figures`, `mesh` block,
+   `time` block). Its mesh lives in `cases/<case>/mesh/` (`case.msh` with named groups,
+   `view_a/b.png`, `validation.json`, `mesh.json` for the app, `status.json` with the mesh key).
+   A run reuses `case.msh` when the mesh key (template + geometry/mesh/materials parameters +
+   mesh block) is unchanged, else rebuilds and stores it back. Runs go to
+   `cases/<case>/results/<run>/` with a frozen `case.json` and `mesh/case.msh`. The `mesh` block
+   (density, boundary refinement, box/disk regions, sharp corners, paint spots) becomes gmsh size
+   fields in `geometry.apply_mesh_options` (`_finish` applies it to every builder); the `time`
+   block (saved-time mode, `dt_max`, `max_rejects`) overrides the template's transient settings in
+   `runner._run_transient`. Legacy `results/<run>/` runs still open read-only.
 
 ### Boundary conditions (`bc.py`)
 Values are numbers, parameter names (strings) or JAX functions `f(x, params)`.
@@ -108,6 +120,8 @@ python run.py --list
 python run.py cylinder --name demo --set delta=0.05
 python hud/server.py                       # current dashboard at http://localhost:8765
 python app/server.py                       # app at http://localhost:8766 (Study tab: Device = Auto/GPU/CPU)
+python run.py --case cases/my_pore --mesh-only   # build + validate a case's mesh (no solve)
+python run.py --case cases/my_pore --name run1   # run a case -> cases/my_pore/results/run1/
 python tools/check_transient.py            # time-stepper check (BDF2 order 2)
 ```
 Device: the server sets `JAX_PLATFORMS` per run (`/api/launch` `device: auto|cpu|gpu`,
@@ -138,7 +152,9 @@ pnpflow/figures_pore.py  pore figures (Fig. 3 layout, evolution, charging, time 
 tools/check_transient.py  BDF2 exact-solution check
 pnpflow/export.py    CSV export of profiles (results/<run>/csv/); tools/export_csv.py re-exports old runs
 docs/pore_answers.md the user's answers for the pore DNS
-pnpflow/runner.py    end-to-end run → results/<name>/
+pnpflow/runner.py    end-to-end run → results/<name>/ or cases/<case>/results/<name>/; build_case_mesh
+pnpflow/project.py   case.json schema/defaults, STEP_RULES (step of each parameter), mesh key, saved times, convergence.txt
+cases/               cases (case.json is source; mesh/ and results/ are generated, git-ignored)
 hud/                 current web dashboard (visual reference for the app)
 docs/THEORY.md       equations, discretisation, BCs
 docs/DATA_FORMAT.md  results folder contract
@@ -146,7 +162,12 @@ docs/MCP.md          agent protocol: tools, gmsh how-to, 2-view render, mesh dia
 docs/ui_design.html  GUI workbook (questions)      docs/ui_answers.md  the answers
 docs/PLAN.md         build plan in phases + FreeCAD layout mapping (screenshot in docs/)
 docs/summary.html    illustrated progress summary (docs/SUMMARY.md = text version)
+docs/how_it_works.html  interactive map: pipeline, run-folder files, where the mesh and data are saved
 app/                 desktop app: server.py (dev server), ui/ (front end), src-tauri/ (unbuilt)
+app/ui/js/params.js  parameter editor (steps come from run.py --list "steps"; unit menu; read-only for results)
+app/ui/js/meshtools.js  Mesh Validation bar + case mesh tools (density, boundary/region refinement, corners, spray paint canvas)
+app/ui/js/units.js   display units (length, potential, concentration, diffusivity, time, permittivity, temperature)
+docs/case_answers.md the user's answers on cases, mesh tools, saved times, units
 PRODUCT.md DESIGN.md impeccable design context (product truth, design tokens)
 .claude/skills/impeccable/   impeccable design skill (project install)
 results/             run outputs (not source)
@@ -170,6 +191,15 @@ results/             run outputs (not source)
 | exports | CSV, figures (PNG/PDF/SVG), reproducing Python script, interactive HTML report |
 | look | HUD colours and type, left menu with SVG icons + shortcut tooltips, standard menu bar (File, Edit, View…), dark default / follows OS, balanced density |
 | layout reference | FreeCAD 1.1 (user's modified dark theme, `docs/Screenshot 2026-11-21 233015.png`): workbench tabs = construction steps, combo panel (tree + properties), Start page with templates / recent / examples, document tabs, status bar. Mapping and changes: `docs/PLAN.md` §1 |
+| parameters | edited on the page of the step that owns them (Geometry, Mesh, Materials, Boundaries, Equations, Study; unknown names → Study); the panel under the tree only shows on Results |
+| mesh validation | **Mesh Validation**: one full-width bar with the counts at the top of the Mesh page; click expands every check (value, limit, note, fix) and a note that problems can slow or break convergence and bias results; opens by itself on a warning/failure |
+| case vs result (`docs/case_answers.md`) | nested: `cases/<case>/case.json` + `mesh/`, runs in `cases/<case>/results/<run>/` (frozen case.json, mesh copy, plots, figures, csv, `convergence.txt`); result inputs are read-only in the app ("Open its case") |
+| mesh tools | toolbar: Create mesh (runs on the CPU; also on the Geometry page), Pan, Box, Disk, Paint (spray), Erase, Density, Boundary refinement, Sharp corners, Validation; all edit case.json `mesh` |
+| saved times | mode picker: template, every Δτ, N log-spaced, list (τ_end, 0.13 and τ_mid always saved); plus `dt_max`, `max_rejects`; compact Time stepping panel |
+| units | unit menu next to every value with a known unit; stored value stays in the template unit; choice saved in case.json `units` |
+| sizes | clickable elements 10 % bigger than the first version (heights, hit areas, their text) |
+| examples | Start page shows at most 5, ranked by importance: pore_narrow 5, pore_dns_narrow_coarse 4, val_gouy_chapman 4, val_mms 3, val_eo_slit 3 |
+| recent runs | Clear recents (Start page) hides the runs listed now, per browser; nothing is deleted; "Show N cleared" restores them |
 
 ### Pore-charging DNS decisions (from `docs/pore_answers.md`)
 
@@ -226,7 +256,9 @@ Tauri front end. Tokens and components: `DESIGN.md`.
 
 ## 8. Physics roadmap (user priority)
 
-1. Project file + generic case (needed by the GUI and MCP for everything below).
+1. Project file + generic case (needed by the GUI and MCP for everything below). *Cases done
+   (2026-11-22: case.json per template, mesh tools, time settings); still to do: a generic
+   case that is not tied to a template (geometry, ions, BCs chosen freely), figure selection.*
 2. Applied potential / current (potentiostat, galvanostat) and **Butler–Volmer** kinetics
    (with Frumkin correction) as new `edge_residual` terms.
 3. Time-dependent: chronoamperometry, CV. *BDF2 time stepping done (2026-11-22, used by

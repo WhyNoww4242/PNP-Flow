@@ -59,3 +59,19 @@ def apply_custom_style(num_colors: int=4, cmap: str='cmr.cosmic_r', cmap_range: 
 
 19. **Other software:** COMSOL looks old and ugly. Want a standard File / Edit / View … menu bar
     across the top.
+
+## Follow-up feedback (2026-11-22)
+
+20. **Geometry tab:** it should hold all the geometry parameters itself; having the parameters
+    in the panel below the tree is weird. → Each construction step page now edits its own
+    parameters (`app/ui/js/params.js` decides the step from the parameter name); the panel under
+    the tree is hidden on those pages and only shows on Results (View settings + run inputs
+    grouped by step).
+21. **Mesh tab:** every check should be its own bubble at the top, clickable, showing when it
+    warns. → One bubble per diagnose check, coloured and iconed by status (fail, warning, pass,
+    info; worst first). Clicking opens value, limit, note and fix; a warning or failure opens
+    automatically.
+22. **Project explainer:** wanted an interactive HTML of how the project works, especially
+    where meshes and data are saved. → `docs/how_it_works.html`.
+    *Superseded 2026-11-22: the bubbles became the expandable Mesh Validation bar
+    (`docs/case_answers.md`).*

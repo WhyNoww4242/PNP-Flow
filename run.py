@@ -3,6 +3,8 @@
 
   python run.py --list
   python run.py cylinder --name demo --set delta=0.1 --set K=50
+  python run.py --case cases/my_pore --name run1      # run a case (cases/<case>/case.json)
+  python run.py --case cases/my_pore --mesh-only      # build + validate its mesh only
 """
 import argparse
 import json
@@ -21,9 +23,23 @@ def main():
     ap.add_argument("--list", action="store_true", help="print cases as JSON")
     ap.add_argument("--no-plots", action="store_true")
     ap.add_argument("--results", default=os.path.join(ROOT, "results"))
+    ap.add_argument("--case", dest="case_dir", metavar="DIR",
+                    help="case folder with case.json (results go to DIR/results/<name>)")
+    ap.add_argument("--mesh-only", action="store_true",
+                    help="with --case: build, validate and render the mesh, no solve")
     args = ap.parse_args()
 
-    from pnpflow.runner import list_cases, run_case
+    from pnpflow.runner import list_cases, run_case, run_from_case, build_case_mesh
+    log = lambda *a: print(*a, flush=True)
+    if args.case_dir:
+        if args.mesh_only:
+            st = build_case_mesh(args.case_dir, log=log)
+            print("mesh:", st["stats"]["n_elements"], "triangles;", "validation in",
+                  os.path.join(args.case_dir, "mesh", "validation.json"))
+            return
+        summary = run_from_case(args.case_dir, args.name, plots=not args.no_plots, log=log)
+        print("converged:", summary["solver"]["converged"])
+        return
     if args.list or not args.case:
         print(json.dumps(list_cases(), indent=1))
         return
