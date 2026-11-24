@@ -422,7 +422,7 @@ def load_msh(path):
 
 def pore_axisym(L=100.0, alpha_in=1.0, alpha_out=1.0, sdl_radius=2.0,
                 sdl_length=51.5, h_wall=0.125, h_entr=0.0625, h_far=1.0,
-                wall_layer=None, entr_radius=None, save=None):
+                wall_layer=None, entr_radius=None, n_radius=0, save=None):
     """Pore 0 <= z <= L with wall r = alpha(z), alpha linear from alpha_in (mouth)
     to alpha_out (end), fed by a cylinder r <= sdl_radius, -sdl_length <= z <= 0.
 
@@ -438,12 +438,19 @@ def pore_axisym(L=100.0, alpha_in=1.0, alpha_out=1.0, sdl_radius=2.0,
     when the pore is no wider than the layer), h_entr inside `entr_radius` of
     the mouth corner (the re-entrant corner where the charged wall meets the
     uncharged SDL face, plus the access region), growing to h_far in the SDL.
+    n_radius > 0 also caps the size inside the pore at alpha(z) / n_radius (at least
+    n_radius elements across the local radius; for tips much thinner than the EDL), and
+    the mouth sizes at alpha_in / n_radius (h_entr at half that).
     """
     a_max = max(alpha_in, alpha_out)
     if not (0 < alpha_in < sdl_radius and alpha_out > 0 and L > 0 and sdl_length > 0):
         raise ValueError("pore_axisym needs 0 < alpha_in < sdl_radius, alpha_out > 0")
     wall_layer = wall_layer if wall_layer is not None else a_max
     entr_radius = entr_radius if entr_radius is not None else 1.5 * a_max
+    h_mouth = h_wall
+    if n_radius and n_radius > 0:
+        h_mouth = min(h_wall, alpha_in / n_radius)
+        h_entr = min(h_entr, alpha_in / (2 * n_radius))
     with gmsh_session("pore_axisym"):
         occ = gmsh.model.occ
         P = [occ.addPoint(*xy, 0) for xy in [
@@ -499,12 +506,24 @@ def pore_axisym(L=100.0, alpha_in=1.0, alpha_out=1.0, sdl_radius=2.0,
         f.setNumbers(d_mouth, "CurvesList", [l["mouth"]])
         t_mouth = f.add("Threshold")
         f.setNumber(t_mouth, "InField", d_mouth)
-        f.setNumber(t_mouth, "SizeMin", h_wall)
+        f.setNumber(t_mouth, "SizeMin", h_mouth)
         f.setNumber(t_mouth, "SizeMax", h_far)
         f.setNumber(t_mouth, "DistMin", entr_radius)
         f.setNumber(t_mouth, "DistMax", entr_radius + 12 * a_max)
+        fields = [t_wall, t_corner, t_mouth]
+        if n_radius and n_radius > 0:
+            # size <= alpha(z) / n_radius inside the pore (alpha linear in z)
+            m_rad = f.add("MathEval")
+            f.setString(m_rad, "F", f"({alpha_in!r} + ({alpha_out!r} - {alpha_in!r}) * y / {L!r})"
+                                    f" / {float(n_radius)!r}")
+            r_rad = f.add("Restrict")
+            f.setNumber(r_rad, "InField", m_rad)
+            f.setNumbers(r_rad, "SurfacesList", [s_pore])
+            f.setNumbers(r_rad, "CurvesList", [l["pore_wall"], l["pore_end"], l["axis_pore"],
+                                               l["mouth"]])
+            fields.append(r_rad)
         final = f.add("Min")
-        f.setNumbers(final, "FieldsList", [t_wall, t_corner, t_mouth])
+        f.setNumbers(final, "FieldsList", fields)
         f.setAsBackgroundMesh(final)
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)

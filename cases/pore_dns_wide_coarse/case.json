@@ -9,13 +9,14 @@
   "D": 1.337e-09,
   "sdl_radius": 0,
   "sdl_length": 0,
-  "tau_end": 0.14,
-  "dns_times": 1,
-  "dns_init": 1,
+  "tau_end": 0.535,
+  "dns_times": 1.0,
+  "dns_init": 1.0,
   "alpha_in": 2,
   "alpha_out": 2,
   "h_wall": 0.15,
-  "phi_end_mV": 10
+  "phi_end_mV": 10,
+  "equilibrium_check": 0.0
  },
  "units": {},
  "figures": {
@@ -26,9 +27,9 @@
  "template": "pore_charging",
  "description": "DNS comparison, wide pore (alpha 2 -> 2), L = 10 \u00b5m, coarse mesh",
  "created": "2026-11-22T23:55:35",
- "modified": "2026-11-23T00:06:54",
+ "modified": "2026-11-23T14:03:37",
  "mesh": {
-  "density": 0.91,
+  "density": 0.95,
   "boundaries": [],
   "regions": [],
   "corners": {

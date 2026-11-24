@@ -37,7 +37,11 @@ DNS_DEFAULT = "/mnt/c/Users/Gnome/Documents/Pore Charging Comparison/transportFo
 CASES = [("narrow", "100_100", "Narrow (10 nm)"),
          ("converging", "200_100", "Converging (20 to 10 nm)"),
          ("diverging", "100_200", "Diverging (10 to 20 nm)"),
-         ("wide", "200_200", "Wide (20 nm)")]
+         ("wide", "200_200", "Wide (20 nm)"),
+         # extreme cases (radius in A in the folder name; alpha = radius / 10 nm)
+         ("r20_200", "20_200", "Diverging tip (2 to 20 nm)"),
+         ("r200_10", "200_10", "Converging tip (20 to 1 nm)"),
+         ("r200_1", "200_1", "Converging tip (20 to 0.1 nm)")]
 KB, E, T = 1.38e-23, 1.6022e-19, 298.15          # pawel.py constants
 VT_PAWEL = KB * T / E
 OUT = os.path.join(ROOT, "results", "pore_dns_compare")

@@ -1,0 +1,18 @@
+# Resume the DNS tau053 queue (tools/run_dns_batch.py) after a reboot or crash.
+# Install (user service; runs at boot because lingering is on):
+#   mkdir -p ~/.config/systemd/user && cp tools/pnpflow-dns-queue.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable pnpflow-dns-queue.service
+# Remove when the queue is done:  systemctl --user disable pnpflow-dns-queue.service
+# It does nothing when the queue has finished, was stopped (exit -15), or is already running.
+[Unit]
+Description=pnpflow: resume the DNS tau053 run queue
+
+[Service]
+Type=simple
+WorkingDirectory=/home/gnome/Code/PNP-Flow
+ExecStartPre=/bin/sleep 90
+ExecStart=/bin/sh -c 'exec /home/gnome/conda/envs/pnpflow/bin/python -u tools/run_dns_batch.py --resume >> results/dns_tau053_nohup.log 2>&1'
+Restart=no
+
+[Install]
+WantedBy=default.target

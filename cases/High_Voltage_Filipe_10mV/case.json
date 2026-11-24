@@ -1,0 +1,65 @@
+{
+ "format": 1,
+ "name": "High_Voltage_Filipe_10mV",
+ "template": "pore_charging",
+ "description": "Fig. 8 of Henrique, Zuk & Gupta 2022: wall 10 mV (Psi_D = 0.389), a_p/lambda_D = 2, Bi = 8, l_p = 1 um",
+ "created": "2026-11-23T18:17:46",
+ "modified": "2026-11-23T18:17:46",
+ "params": {
+  "alpha_in": 2.0,
+  "alpha_out": 2.0,
+  "L_nm": 1000.0,
+  "a_ref_nm": 10.0,
+  "c0_mM": 0.948,
+  "eps": 7.0832e-10,
+  "T": 298.15,
+  "D": 1.337e-09,
+  "sdl_radius": 4.0,
+  "sdl_length": 50.0,
+  "tau_end": 0.5,
+  "tau_mid": 0.15,
+  "dns_times": 0.0,
+  "dns_init": 0.0,
+  "equilibrium_check": 1.0,
+  "rtol": 0.002,
+  "err_mixed": 1.0,
+  "phi_w_mV": 10.0,
+  "phi_end_mV": 10.0,
+  "dt0": 0.01
+ },
+ "units": {},
+ "figures": {
+  "standard": true
+ },
+ "mesh": {
+  "density": 1.0,
+  "boundaries": [],
+  "regions": [],
+  "corners": {
+   "enabled": false,
+   "size": 0.0,
+   "radius": 0.0,
+   "max_angle": 80.0
+  },
+  "paint": [],
+  "paint_growth": 1.2
+ },
+ "time": {
+  "save": {
+   "mode": "list",
+   "dtau": 0.05,
+   "n": 20,
+   "tau_min": 0.0001,
+   "list": [
+    0.01,
+    0.03,
+    0.07,
+    0.15,
+    0.3,
+    0.5
+   ]
+  },
+  "dt_max": null,
+  "max_rejects": 12
+ }
+}

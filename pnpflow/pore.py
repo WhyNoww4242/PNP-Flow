@@ -38,9 +38,9 @@ DEFAULTS = {
     "phi_w_mV": 10.0, "c0_mM": 0.94, "eps": 7.1e-10, "T": 298.15, "D": 1.34e-9,
     "phi_end_mV": 10.0, "sdl_radius": 0.0, "sdl_length": 0.0,
     "tau_end": 1.0, "tau_mid": 0.5,
-    "h_wall": 0.0, "h_entr": 0.0, "h_far": 1.0,
+    "h_wall": 0.0, "h_entr": 0.0, "h_far": 1.0, "h_radius_n": 0.0,
     "dt0": 0.01, "rtol": 2e-3, "equilibrium_check": 1.0,
-    "dns_times": 0.0, "dns_init": 0.0,
+    "dns_times": 0.0, "dns_init": 0.0, "err_mixed": 0.0,
 }
 INFO = {
     "alpha_in": "pore radius at the mouth Z = 0, in units of a_ref (alpha(0))",
@@ -64,6 +64,8 @@ INFO = {
     "h_wall": "element size in the pore / at the pore wall (0 = min(delta, alpha)/10, so >= 8 elements cross the EDL)",
     "h_entr": "element size at the mouth corner (0 = h_wall/2)",
     "h_far": "element size far into the SDL",
+    "h_radius_n": "0 = off. n > 0: element size in the pore at most alpha(Z)/n (n elements across "
+                  "the local radius), mouth sizes at most alpha_in/n; for tips thinner than the EDL",
     "dt0": "first time step in units of a_ref^2 / D (~ Debye time when delta ~ 1)",
     "rtol": "time-step control: max change vs linear extrapolation per step",
     "equilibrium_check": "1: also solve the steady (equilibrium) state and compare the "
@@ -73,6 +75,8 @@ INFO = {
     "dns_init": "1: start from the DNS initial field (c = c0, phi = phi_w in the pore, "
                 "0 in the SDL) as given, without the consistent-phi solve; phi follows "
                 "from Poisson from the first time step on",
+    "err_mixed": "1: time-step error measured relative to 1 + |U| (needed at high wall "
+                 "potentials, where c- ~ exp(Phi_w) >> 1 at the wall); 0: absolute (default)",
 }
 
 DNS_DT_S = 0.005          # DNS output interval [s]
@@ -134,7 +138,8 @@ def build_pore_charging(p):
     h_far = max(p["h_far"], h_wall)
     mesh = geometry.pore_axisym(L=L, alpha_in=ai, alpha_out=ao, sdl_radius=a_s,
                                 sdl_length=l_s, h_wall=h_wall, h_entr=h_entr,
-                                h_far=h_far, wall_layer=min(amax, 3 * delta))
+                                h_far=h_far, wall_layer=min(amax, 3 * delta),
+                                n_radius=p.get("h_radius_n", 0.0))
 
     species = [Species("c+", 1.0), Species("c-", -1.0)]
     params = {"delta": delta, "Pe": 1.0, "phi_w": phi_w}
@@ -152,6 +157,23 @@ def build_pore_charging(p):
 
     def alpha(Z):
         return ai + (ao - ai) * np.asarray(Z, float)
+
+    # charge in the pore at every accepted time step: Q = int_pore rho r dr dz (per
+    # radian) = w . rho with w_i = int_pore N_i r dA.  dQ/dtau gives the charge flux
+    # through the mouth (paper Jright), exactly conservative (walls and end are blocking).
+    w_pore = np.zeros(model.n)
+    pore_el = np.asarray(model.mesh.regions.get("pore", []), dtype=np.int64)
+    if pore_el.size:
+        contrib = np.asarray(model.geo["wd"])[pore_el] @ np.asarray(model.N)   # (Ep, 6)
+        np.add.at(w_pore, np.asarray(model.mesh.tri)[pore_el], contrib)
+    n_nodes = model.n
+    charge_steps = {"t": [], "Q": []}
+
+    def on_accept(t, U):
+        U = np.asarray(U)
+        rho = U[:n_nodes] - U[n_nodes:2 * n_nodes]
+        charge_steps["t"].append(float(t))
+        charge_steps["Q"].append(float(w_pore @ rho))
 
     t_per_tau = L ** 2                                  # t~ = tau L^2
     tau_per_s = p["D"] / (p["L_nm"] * 1e-9) ** 2
@@ -186,7 +208,9 @@ def build_pore_charging(p):
         for k in ("mu", "phi", "rho"):
             v = an.evaluate(pts, fl[k]).reshape(r.shape)
             vals[k] = (np.sum(w * v, axis=1) / np.sum(w, axis=1)).tolist()
-        vals["mu_axis"] = an.evaluate(np.stack([0 * z, z], 1), fl["mu"]).tolist()
+        axis_pts = np.stack([0 * z, z], 1)
+        for k in ("mu", "phi", "rho"):                    # centreline (paper Psi_m, rho_m)
+            vals[f"{k}_axis"] = an.evaluate(axis_pts, fl[k]).tolist()
         return vals
 
     def radial(an, fl):
@@ -222,7 +246,20 @@ def build_pore_charging(p):
                                                / _trapz(area, Zp)))
             series["Q_pore_per_rad"].append(float(_trapz(rho * area, Zp) * L))
             series["mu_Z05"].append(float(np.interp(0.5, Zp, mu)))
-        return lines, {"charging": series}
+        out = {"charging": series}
+        if len(charge_steps["t"]) > 2:
+            tau_s = np.asarray(charge_steps["t"]) / t_per_tau
+            Q_s = np.asarray(charge_steps["Q"])
+            keep = np.concatenate([[True], np.diff(tau_s) > 0])
+            tau_s, Q_s = tau_s[keep], Q_s[keep]
+            # J = (2 / (L alpha_in^2)) dQ/dtau: mouth charge flux in D c0 / l_p, averaged
+            # over the mouth area (Q per radian in a_ref units; t~ = tau L^2)
+            J = 2.0 / (L * ai ** 2) * np.gradient(Q_s, tau_s)
+            out["mouth"] = {"tau": tau_s.tolist(), "Q_pore_per_rad": Q_s.tolist(),
+                            "J_right": J.tolist(),
+                            "note": "every accepted step; J_right = 2/(L alpha_in^2) dQ/dtau, "
+                                    "units D c0 / l_p, positive into the pore"}
+        return lines, out
 
     def equilibrium_lines(an):
         """Steady state: radial profile at Z = 0.5 vs the cylinder PB solution."""
@@ -280,7 +317,8 @@ def build_pore_charging(p):
         f"tau = D t / l_p^2 = t_solver / {t_per_tau:g}; 1 tau = "
         f"{(p['L_nm'] * 1e-9) ** 2 / p['D']:.4g} s.",
         "mu = rho + 2 Phi (cross-section average with weight r dr in axial lines).",
-        f"mesh: h_wall = {h_wall:.3g}, h_entr = {h_entr:.3g} (mouth corner), h_far = {h_far:g}.",
+        f"mesh: h_wall = {h_wall:.3g}, h_entr = {h_entr:.3g} (mouth corner), h_far = {h_far:g}"
+        + (f", size <= alpha(Z)/{p['h_radius_n']:g} in the pore." if p.get("h_radius_n") else "."),
         "Axisymmetric (r, z): mesh x = r, y = z; integrals per radian.",
     ]
     kP, eP, NP = PAWEL_CONST["kB"], PAWEL_CONST["e"], PAWEL_CONST["NA"]
@@ -320,6 +358,8 @@ def build_pore_charging(p):
         "equilibrium": bool(p["equilibrium_check"]),
         "params": params,
         "U0": U0_dns,
+        "on_accept": on_accept,
+        "err_scale": "mixed" if p.get("err_mixed") else "abs",
     }
     # base/path describe the steady equilibrium solve: phi_w ramped up from 0
     return Setup(model, [{"phi_w": phi_w}], dict(params, phi_w=0.0),

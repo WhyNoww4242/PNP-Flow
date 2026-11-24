@@ -245,7 +245,8 @@ def _run_transient(spec, name, params, run_name, folder, progress, plots, log, p
         consistent_init=U0_given is None,
         dt0=tr.get("dt0", 1e-2), dt_max=dt_max, rtol=tr.get("rtol", 1e-3),
         on_output=lambda tt, UU: snapshots.append((float(tt), np.asarray(UU))),
-        on_step=on_step, log=log)
+        on_step=on_step, log=log, on_accept=tr.get("on_accept"),
+        err_scale=tr.get("err_scale", "abs"))
     solve_time = time.time() - t1
     log(f"time stepping: ok={ok}, {len(steps)} steps to t = {t:.6g} "
         f"(tau = {t / t_per:.4g}) in {solve_time:.1f}s")

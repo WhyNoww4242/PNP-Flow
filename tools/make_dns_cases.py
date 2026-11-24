@@ -26,7 +26,12 @@ spec = importlib.util.spec_from_file_location("project", os.path.join(ROOT, "pnp
 project = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(project)
 
-SHAPES = {"narrow": (1, 1), "converging": (2, 1), "diverging": (1, 2), "wide": (2, 2)}
+SHAPES = {"narrow": (1, 1), "converging": (2, 1), "diverging": (1, 2), "wide": (2, 2),
+          # extreme cases: DNS folders poreRadius20_200, 200_10, 200_1 (radius in A)
+          "r20_200": (0.2, 2), "r200_10": (2, 0.1), "r200_1": (2, 0.01)}
+EXTREME = {"r20_200", "r200_10", "r200_1"}
+EXTREME_PARAMS = {"tau_end": 0.535, "equilibrium_check": 0.0,
+                  "h_radius_n": 6.0}     # >= 6 elements across the local radius (tips << lambda_D)
 COMMON = {"L_nm": 10000.0, "a_ref_nm": 10.0, "phi_w_mV": 10.0, "c0_mM": 0.948,
           "eps": 7.0832e-10, "T": 298.15, "D": 1.337e-9, "phi_end_mV": 10.0,
           "sdl_radius": 0.0, "sdl_length": 0.0, "tau_end": 1.01, "dns_times": 1.0,
@@ -51,6 +56,8 @@ def main():
         params = dict(COMMON, alpha_in=float(a_in), alpha_out=float(a_out))
         if args.coarse:
             params["h_wall"] = COARSE_H
+        if shape in EXTREME:
+            params.update(EXTREME_PARAMS)
         case = project.default_case("pore_charging", params, name)
         case["description"] = (f"DNS comparison, {shape} pore (alpha {a_in} -> {a_out}), "
                                f"L = 10 µm{', coarse mesh' if args.coarse else ''}")

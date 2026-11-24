@@ -2,20 +2,21 @@
  "params": {
   "L_nm": 10000,
   "a_ref_nm": 10,
-  "phi_w_mV": 10,
+  "phi_w_mV": 75,
   "c0_mM": 0.948,
   "eps": 7.0832e-10,
   "T": 298.15,
   "D": 1.337e-09,
   "sdl_radius": 0,
   "sdl_length": 0,
-  "tau_end": 0.14,
+  "tau_end": 0.535,
   "dns_times": 1,
   "dns_init": 1,
   "alpha_in": 2,
-  "alpha_out": 1,
+  "alpha_out": 2,
   "h_wall": 0.15,
-  "phi_end_mV": 10
+  "phi_end_mV": 75,
+  "equilibrium_check": 0
  },
  "units": {
   "L_nm": "\u00b5m"
@@ -23,13 +24,13 @@
  "figures": {
   "standard": true
  },
- "next_run_name": "pore_dns_converging",
+ "next_run_name": null,
  "format": 1,
  "name": "pore_dns_converging_coarse",
  "template": "pore_charging",
  "description": "DNS comparison, converging pore (alpha 2 -> 1), L = 10 \u00b5m, coarse mesh",
  "created": "2026-11-22T23:55:35",
- "modified": "2026-11-23T11:21:34",
+ "modified": "2026-11-23T18:18:58",
  "mesh": {
   "density": 0.95,
   "boundaries": [],
@@ -45,8 +46,8 @@
  },
  "time": {
   "save": {
-   "mode": "uniform",
-   "dtau": 0.01,
+   "mode": "template",
+   "dtau": 0.05,
    "n": 20,
    "tau_min": 0.0001,
    "list": []

@@ -99,7 +99,7 @@ def bdf_coefficients(dt, dt_prev):
 
 def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None,
               rtol=1e-3, w_max=2.0, max_rejects=12, on_output=None, on_step=None,
-              log=print, consistent_init=True):
+              log=print, consistent_init=True, on_accept=None, err_scale="abs"):
     """Adaptive BDF2 from t = 0 to t_end.
 
     outputs   : times at which on_output(t, U) is called (hit exactly)
@@ -110,6 +110,11 @@ def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None
                 discretisation error is checked separately (tools/check_transient.py)
     w_max     : largest step ratio (BDF2 is zero-stable for w < 1 + sqrt 2)
     on_step(info) gets a dict per accepted/rejected step (for live status).
+    on_accept(t, U) is called after every accepted step (and at t = 0) for cheap
+                per-step quantities (e.g. the charge in a region).
+    err_scale : "abs" (default): err = max |U - U_pred|.  "mixed": err = max
+                |U - U_pred| / (1 + |U|), for fields that grow far above 1 (EDL
+                concentrations at high potentials, c ~ exp(Phi)).
     Returns (U, t, steps, ok).
     """
     m = tasm.model
@@ -130,6 +135,8 @@ def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None
             log("  consistent initial phi: Newton did not converge, using U0 as given")
     if on_output is not None:
         on_output(0.0, U0)
+    if on_accept is not None:
+        on_accept(0.0, U0)
 
     t, U, U_prev, dt_prev = 0.0, jnp.asarray(U0), None, None
     dt = min(dt0, dt_max)
@@ -164,6 +171,8 @@ def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None
             err = None
             if ok:
                 diff = np.asarray(U_new - U_pred)[watch]
+                if err_scale == "mixed":
+                    diff = diff / (1.0 + np.abs(np.asarray(U_new)[watch]))
                 err = float(np.max(np.abs(diff)))
             accept = ok and (err is None or U_prev is None or err <= 4 * rtol)
             info = {"t": t, "dt": dt_try, "newton_its": len(hist) - 1,
@@ -190,6 +199,8 @@ def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None
                       "res_final": hist[-1]["res_norm"]})
         log(f"step {len(steps):4d}  t {t:.6g}  dt {dt_try:.3g}  "
             f"its {len(hist) - 1}  err {err if err is None else f'{err:.2e}'}")
+        if on_accept is not None:
+            on_accept(t, U)
         # next step size from the error estimate and Newton effort
         if err is None or err <= 0:
             fac = 1.5

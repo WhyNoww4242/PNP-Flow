@@ -34,7 +34,8 @@ Goals:
 | Time stepping (`pnpflow/transient.py`) | Python + JAX | variable-step BDF2, checked (order 2.1, `tools/check_transient.py`) |
 | Cases (`pnpflow/project.py`) | JSON | `cases/<case>/case.json` = template + parameters + mesh options + time settings; mesh built and reused per case; runs in `cases/<case>/results/` (2026-11-22). Generic (template-free) case not started |
 | Mesh tools (`pnpflow/meshtools.py`, `geometry.apply_mesh_options`, `app/ui/js/meshtools.js`, `repair.js`) | Python + JS | two-view render + diagnose before every solve; case `mesh` block (density, boundary / box / disk refinement, sharp corners, spray paint) → gmsh size fields; Mesh page with Validation bar and a "Repair mesh" workspace (2026-11-23) |
-| Pore DNS comparison (`tools/make_dns_cases.py`, `run_pore_dns.sh`, `figure_dns4.py`) | Python + bash | coarse cases (h_wall 0.15) for converging / diverging / wide; converging run to τ = 0.14 done; full runs to τ ≈ 0.53 planned in `docs/run_dns_tau053.md` (§6) |
+| High-voltage pore charging, paper Fig. 8 (`tools/make_high_voltage_cases.py`, `figure_high_voltage.py`) | Python | cases `High_Voltage_Filipe_{10,50,100,200}mV` created, meshes checked (2026-11-23); runs to τ = 0.5 still to do on the GPU machine (§6, `docs/high_voltage_filipe.md`) |
+| Pore DNS comparison (`tools/make_dns_cases.py`, `run_dns_batch.py`, `figure_dns6.py`, `report_dns.py`) | Python + bash | all four shapes to τ = 0.535 done (2026-11-23), max \|Δμ\| ≤ 0.0076 vs DNS; report `results/pore_dns_compare/report.html` + `REPORT.md`; extreme cases (r20_200, r200_10, r200_1) queued with `--set extreme` (§6) |
 
 ## 2. Physics (nondimensional)
 
@@ -154,8 +155,13 @@ settings (`run.py --case`); a **run** is one solve in `results/<run>/` or
 `pore_charging` options beyond the paper set-up: `phi_end_mV` (closed pore end, default =
 wall; replaced `end_charged`), `dns_times` (save at the DNS folder times τ_k = 0.06685 k for
 L = 10 µm, k = 1..15, plus τ_end), `dns_init` (start from the DNS field: c = c0, φ = φ_w in the
-pore), `equilibrium_check`, `dt0`, `rtol`. `python run.py --list` prints every default with
-its help text.
+pore), `equilibrium_check`, `dt0`, `rtol`, `h_radius_n` (0 = off; n > 0 caps the pore element size
+at α(Z)/n and the mouth sizes at α_in/n, for tips thinner than the EDL; `geometry.pore_axisym(n_radius=)`),
+`err_mixed` (1: BDF2 step error |ΔU| / (1 + |U|), for high wall potentials where c ≫ c0).
+Every pore run also writes centreline `phi_axis`, `rho_axis` (beside `mu_axis`) in the axial lines and
+`summary.integrals.mouth` (pore charge Q at every accepted step, `J_right` = 2/(L α_in²) dQ/dτ, the
+mouth charge flux in D c0 / l_p; `transient.integrate(on_accept=, err_scale=)`).
+`python run.py --list` prints every default with its help text.
 
 `bash tools/validate.sh` runs `tools/check_transient.py` and the validation cases
 gouy_chapman, eo_slit, mms, charged_sphere as runs `val_<case>` (all pass as of 2026-11-15).
@@ -177,6 +183,17 @@ python tools/check_transient.py            # time-stepper check (BDF2 order 2)
 python tools/make_dns_cases.py --coarse narrow          # cases/pore_dns_narrow_coarse/case.json
 bash tools/run_pore_dns.sh [narrow converging ...]      # template runs -> results/pore_dns_<case>/
 python tools/figure_dns4.py --dns DNS_compare/transportFolder   # figureDNS4 + combined CSV
+nohup python -u tools/run_dns_batch.py > results/dns_tau053_nohup.log 2>&1 &   # 4 cases to tau 0.535, remesh on failure
+nohup python -u tools/run_dns_batch.py --set extreme > results/dns_extreme_nohup.log 2>&1 &   # r20_200, r200_10, r200_1
+python tools/run_dns_batch.py --resume                 # restart an unfinished queue (lock: one queue at a time)
+python tools/run_dns_batch.py --classify <run_dir>     # ok | oom | solver | stopped
+python tools/figure_dns6.py --status results/dns_tau053_status.json   # 3 x 2 figureDNS6 (mu, Phi, rho)
+python tools/figure_dns6.py --status results/dns_extreme_status.json --times 0.01 0.035 --name figureDNS6_extreme
+python tools/make_high_voltage_cases.py                # cases/High_Voltage_Filipe_{10,50,100,200}mV (paper Fig. 8)
+python tools/figure_high_voltage.py                     # Fig. 8 figure + CSV + side-by-side HTML (newest finished runs)
+python tools/report_dns.py --status results/dns_tau053_status.json [--status results/dns_extreme_status.json] \
+    --notes results/pore_dns_compare/report_notes.html --figure "figures/figureDNS6.png=caption" \
+    --out results/pore_dns_compare/report.html [--artifact DIR]   # interactive pnpflow-vs-DNS report
 
 # re-export older runs
 python tools/export_csv.py results/<run>               # csv/
@@ -229,9 +246,22 @@ tools/validate.sh            validation runs (check_transient + 4 analytic cases
 tools/check_transient.py     BDF2 exact-solution check
 tools/export_csv.py          CSV for old runs          tools/export_fields_time.py  fields_time.json for old runs
 tools/export_colormaps.py    cmasher LUTs -> app/ui/data/colormaps.json
-tools/make_dns_cases.py      create cases/pore_dns_<shape>[_coarse]/case.json
+tools/make_dns_cases.py      create cases/pore_dns_<shape>[_coarse]/case.json (shapes: narrow, converging, diverging, wide,
+                             extreme r20_200, r200_10, r200_1 with h_radius_n = 6)
 tools/run_pore_dns.sh        queue the 4 DNS template runs (retry once with h_wall 0.15)
 tools/figure_dns4.py         pnpflow vs DNS figure (figureDNS4 layout) + combined CSV / error table
+tools/run_dns_batch.py       DNS queue to tau 0.535: mesh check, GPU solve, classify, remesh by failure type
+                             (results/dns_tau053_queue.log, dns_tau053_status.json), then figure_dns6;
+                             --set extreme (dns_extreme_*), --resume, lock file, case.json parameter check before
+                             every solve, retry once after a crash, no JAX VRAM preallocation, nice 10
+tools/pnpflow-dns-queue.service  systemd user unit: run_dns_batch.py --resume at boot (install by hand)
+tools/report_dns.py          interactive HTML report (Plotly): runs, profiles vs DNS, differences, time steps,
+                             failures, notes; --artifact writes a claude.ai Artifact build
+tools/make_high_voltage_cases.py  create cases/High_Voltage_Filipe_<mV>mV (paper Fig. 8: alpha 2, L 1 µm, Bi 8,
+                             10/50/100/200 mV, wall mesh from the Gouy-Chapman layer thickness)
+tools/figure_high_voltage.py figure8_pnpflow (5 panels as paper Fig. 8) + csv + High_Voltage_Filipe_comparison.html
+                             (paper figure vs pnpflow, panel by panel) in results/high_voltage_filipe/
+tools/figure_dns6.py         3 x 2 figureDNS6 (mu centreline, Phi and rho at Z = 0.5; tau 0.13, 0.53), runs picked explicitly
 scratch_eo.py                old stand-alone EO-slit smoke test
 
 cases/               cases (case.json is source; mesh/ and results/ are generated, git-ignored)
@@ -262,6 +292,8 @@ docs/ui_design.html  GUI workbook (questions)      docs/ui_answers.md  the answe
 docs/case_answers.md the user's answers on cases, mesh tools, saved times, units
 docs/pore_answers.md the user's answers for the pore DNS (1 µm paper set-up)
 docs/pore_dns_answers.md, pore_dns_plan.md   DNS comparison runs (10 µm): answers and plan
+docs/high_voltage_filipe.md  High_Voltage_Filipe cases (paper Fig. 8): answers, set-up, mesh sizes, commands;
+                     docs/high_voltage_filipe/paper_fig8.png = the paper's figure (CC BY 4.0)
 docs/run_dns_tau053.md   instructions: the four DNS runs to tau = 0.535 with auto-remesh + 6-panel figure
 docs/summary.html    illustrated progress summary (docs/SUMMARY.md = text version)
 docs/how_it_works.html  interactive map: pipeline, run-folder files, where the mesh and data are saved
@@ -333,14 +365,28 @@ Tauri front end. Tokens and components: `DESIGN.md`.
 | μ line | centreline `mu_axis` (matches the DNS `lineYe` file); the cross-section average `mu` is also in profiles.json |
 | DNS data | `DNS_compare/transportFolder/poreRadius<in>_<out>/<t>/lineYe_*.xy` (centreline) and `lineXm5_*.xy` (Z = 0.5). `figure_dns4.py`'s default `--dns` is an old WSL path: pass `--dns DNS_compare/transportFolder` |
 
-Status (2026-11-23): coarse cases `cases/pore_dns_{converging,diverging,wide}_coarse`
-(h_wall 0.15; mesh density 0.95 / 1.0 / 0.91); the narrow case is not created yet. One
-converging run reached τ = 0.14 (`..._261123_1018`, density 1.2, 241k triangles, 2.63M dofs,
-76 BDF2 steps in 2622 s on the GPU, then the equilibrium solve). Next: all four to τ_end = 0.535
-(DNS k = 8 is τ = 0.5348) at density 0.95, remeshing on failure, and a 3 × 2 figure
-(μ̂(Z), Φ̂ and ρ̂ at Z = 0.5; τ = 0.13, 0.53): `docs/run_dns_tau053.md`. The memory numbers in
+Status (2026-11-23): all four coarse cases ran to τ = 0.535 at density 0.95 (runs in
+`results/dns_tau053_status.json`; 22–44 min each on the GPU); figureDNS6 and the report
+`results/pore_dns_compare/report.html` (+ `REPORT.md`) are done. pnpflow follows the DNS to
+≤ 0.17 % in Φ and ≤ 1.4 % in ρ at Z = 0.5; the centreline μ at the closed end drifts below the DNS
+linearly in τ (1–5 % of the local value at τ = 0.53), mesh-independent (density 1.2 vs 0.95 agree);
+candidates: BDF2 time error (rtol 2e-3) or reservoir geometry. `converging_tau053_d095` is invalid
+(case.json held template defaults; suspected app save), rerun as `..._d095_2`. Extreme cases
+`cases/pore_dns_r{20_200,200_10,200_1}_coarse` (DNS poreRadius20_200 / 200_10 / 200_1; folder
+number = radius in Å, α = radius / 10 nm; h_radius_n = 6; DNS data to t = 0.035 s only) run with
+`run_dns_batch.py --set extreme`, figure at t = 0.01, 0.035 s. The memory numbers in
 `docs/pore_dns_plan.md` were for WSL (15 GB); the repo now runs on native Linux (pop-os,
 `~/Code/PNP-Flow`), so check `free -g` before sizing meshes.
+
+### High_Voltage_Filipe (paper Fig. 8, `docs/high_voltage_filipe.md`)
+
+| topic | decision |
+|---|---|
+| target | Fig. 8 of Henrique, Zuk & Gupta 2022: Ψ_m/Ψ_D, −ρ_m/Ψ_D (centreline) vs Z at τ = 0.07, 0.15; −J_right/Ψ_D vs τ to 0.5 |
+| geometry | straight pore α = 2, a_ref = 10 nm (a_p = 20 nm, a_p/λ_D = 2.005), L = 1 µm; SDL radius 4, length 50 (Bi = 8 exactly, Z from −0.5) |
+| values | DNS-comparison constants (c0 = 0.948 mM, ε = 7.0832e-10 F/m, D = 1.337e-9 m²/s); φ_w = φ_end = 10, 50, 100, 200 mV |
+| cases | one folder per potential; 100 and 200 mV get wall / end / mouth refinement (case `mesh` block), `dt0 = 1e-3`; all use `err_mixed = 1` |
+| output | pnpflow only (dashed, as the paper's DNS), no perturbation model; HTML side by side with the paper figure |
 
 ## 7. Agent protocol (MCP) — summary of `docs/MCP.md`
 
