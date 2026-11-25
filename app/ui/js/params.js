@@ -10,11 +10,13 @@
 //
 // Units: every value is stored in its template unit; the unit menu next to a field
 // changes the unit it is shown and typed in (units.js). Case documents remember the
-// choice in case.json "units"; other documents only for this session.
+// choice in case.json "units"; other documents only for this session. In the
+// dimensionless display (status bar toggle) a value with a reference scale is shown and
+// typed in that scale (V_T, a_ref, c0, D, l_p²/D, ε_r; units.scalesFor) instead.
 
 import { h, fmt, stripUnit, sameValue } from "./util.js";
 import { icon } from "./icons.js";
-import { unitChoices, convert, canonUnit } from "./units.js";
+import { unitChoices, convert, canonUnit, scalesFor, scaleOf } from "./units.js";
 
 const STEP_RULES = [
   ["mesh", /^(h|h_\w+|\w+_size|n_elem\w*|refine\w*)$/],
@@ -23,6 +25,21 @@ const STEP_RULES = [
   ["boundaries", /^(zeta\w*|phi_w\w*|stern\w*|side_slip|phi_end\w*|outer_bc|sigma\w*)$/],
   ["equations", /^(Pe|Re|K|Ex|advection|supg)$/],
 ];
+
+// Readable names for Beginner mode (the key stays in the tooltip and in Expert mode).
+export const PARAM_NAME = {
+  D: "Ion diffusivity D", Ex: "Applied field E_x", K: "Electro-viscous number K", L_nm: "Pore length l_p", Pe: "Péclet number Pe",
+  R: "Sphere radius R", R_out: "Outer radius", Re: "Reynolds number Re", T: "Temperature T", a_ref_nm: "Reference radius a_ref",
+  advection: "Advection form", alpha_in: "Mouth radius α_in", alpha_out: "End radius α_out", c0_mM: "Bulk concentration c0",
+  d_minus: "Anion diffusivity d₋", d_plus: "Cation diffusivity d₊", delta: "Debye length δ", dns_init: "Start from the DNS field",
+  dns_times: "Save at the DNS times", downstream: "Domain length downstream", dt0: "First time step", eps: "Permittivity ε",
+  equilibrium_check: "Also solve the steady state", err_mixed: "Mixed step error", h: "Element size h", h_entr: "Element size at the mouth",
+  h_far: "Element size far away", h_radius_n: "Elements across the radius", h_sphere: "Element size at the sphere", h_wall: "Element size at the wall",
+  half_width: "Domain half-width", length: "Domain length", outer_bc: "Outer boundary condition", phi_end_mV: "End potential φ_end",
+  phi_w_mV: "Wall potential φ_w", q: "Charge q", rtol: "Time-step tolerance", sdl_length: "Reservoir length", sdl_radius: "Reservoir radius",
+  sens: "Sensitivities", side_slip: "Slip on the side walls", stern: "Stern layer", stern_C: "Stern capacitance", supg: "SUPG stabilisation",
+  tau_end: "End time τ_end", tau_mid: "Middle time τ_mid", upstream: "Domain length upstream", zeta_mV: "Wall potential ζ",
+};
 
 export const STEP_LABEL = { geometry: "Geometry", mesh: "Mesh", materials: "Materials", boundaries: "Boundaries", equations: "Equations", study: "Study" };
 
@@ -56,14 +73,19 @@ function baseValue(doc, k, dflt) {
   return inp && k in inp ? inp[k] : dflt;
 }
 
-export function setParam(app, doc, k, raw, fromText, unit) {
+/** Scales of the dimensionless display for this document, or null in SI. */
+export function docScales(app, doc) {
+  return app.S.units === "dimensionless" ? scalesFor(app.paramRows(doc)) : null;
+}
+
+export function setParam(app, doc, k, raw, fromText, unit, scales) {
   const r = app.paramRows(doc).find((x) => x.key === k);
   const p = fromText ? parseParam(raw, r ? r.dflt : undefined) : { ok: true, v: raw };
   doc.invalid = doc.invalid || {};
   if (!p.ok) { doc.invalid[k] = { raw, err: p.err }; return false; }
   delete doc.invalid[k];
   // typed in a display unit: store in the template unit
-  const v = r && unit && typeof p.v === "number" ? convert(p.v, unit, r.unit) : p.v;
+  const v = r && unit && typeof p.v === "number" ? convert(p.v, unit, r.unit, scales) : p.v;
   if (sameValue(v, baseValue(doc, k, r ? r.dflt : undefined))) delete doc.edits[k]; else doc.edits[k] = v;
   return true;
 }
@@ -77,7 +99,9 @@ export function resetParam(app, doc, k) {
 }
 
 /** Unit a parameter is shown in for this document. */
-export function shownUnit(doc, r) {
+export function shownUnit(doc, r, scales) {
+  const sc = scaleOf(r.key, r.unit, scales);
+  if (sc) return sc.sym;
   const units = (doc.kind === "case" && doc.caseData && doc.caseData.units) || doc.units || {};
   const u = units[r.key];
   return u && unitChoices(r.unit).includes(canonUnit(u)) ? canonUnit(u) : canonUnit(r.unit);
@@ -95,6 +119,8 @@ function setShownUnit(app, doc, key, unit) {
 }
 
 const fmtNum = (v) => (typeof v === "number" ? String(Number.parseFloat(v.toPrecision(10))) : JSON.stringify(v));
+// scaled values carry the scale's own precision; 5 digits reads well (2.9191 V_T)
+const fmtDim = (v) => (typeof v === "number" ? String(Number.parseFloat(v.toPrecision(5))) : JSON.stringify(v));
 
 /**
  * Editable parameter list.
@@ -112,27 +138,33 @@ export function paramForm(app, doc, rows, { layout = "page", expert = false, rea
     doc.invalid = doc.invalid || {};
     const bad = doc.invalid[r.key];
     const id = `p-${layout}-${r.key}`;
-    const unit = shownUnit(doc, r);
+    const scales = docScales(app, doc);
+    const sc = scaleOf(r.key, r.unit, scales);
+    const unit = shownUnit(doc, r, scales);
     const choices = unitChoices(r.unit);
     let control;
     if (typeof r.dflt === "boolean" || typeof r.value === "boolean") {
       control = h("label.chk", {}, h("input", { type: "checkbox", id, checked: !!r.value, disabled: readonly || null, onchange: (e) => commit(r.key, e.target.checked, false) }),
         h("span", { text: r.value ? "on" : "off" }));
     } else {
-      const shown = typeof r.value === "number" ? convert(r.value, r.unit, unit) : r.value;
+      const shown = typeof r.value === "number" ? convert(r.value, r.unit, unit, scales) : r.value;
       const inp = h("input.inp", {
         type: "text", spellcheck: "false", id, inputmode: typeof r.dflt === "number" ? "decimal" : null, readonly: readonly || null,
-        value: bad ? bad.raw : typeof shown === "string" ? shown : fmtNum(shown),
+        value: bad ? bad.raw : typeof shown === "string" ? shown : sc ? fmtDim(shown) : fmtNum(shown),
         class: [r.changed ? "changed" : "", bad ? "invalid" : ""].join(" "),
         "aria-invalid": bad ? "true" : null, "aria-describedby": bad ? `${id}-err` : null,
-        onchange: (e) => commit(r.key, e.target.value, true, unit),
+        onchange: (e) => commit(r.key, e.target.value, true, unit, scales),
         onkeydown: (e) => {
           if (e.key === "Enter") e.target.blur();
-          if (e.key === "Escape") { e.target.value = fmtNum(shown); e.target.blur(); }
+          if (e.key === "Escape") { e.target.value = sc ? fmtDim(shown) : fmtNum(shown); e.target.blur(); }
         },
       });
       // unit: a menu when the unit has alternatives, plain text otherwise
-      const unitEl = choices.length > 1
+      // dimensionless display: the scale as plain text, its meaning and SI value in the tooltip
+      const unitEl = sc
+        ? h("span.unit-txt.unit-dim", { text: unit, "data-tip-title": `${unit}: ${sc.what}`,
+          "data-tip": `${unit} = ${fmt(sc.factor, 4)} ${canonUnit(familyBase(r.unit))}. This value is ${fmt(r.value)} ${r.unit}. Switch to SI to pick another unit.` })
+        : choices.length > 1
         ? h("select.unit-sel", { "aria-label": `Unit of ${r.key}`, "data-tip": `Show ${r.key} in another unit (stored in ${r.unit})`,
           onchange: (e) => { setShownUnit(app, doc, r.key, e.target.value); redraw(r.key); } },
           choices.map((u) => h("option", { value: u, text: u, selected: u === unit || null })))
@@ -145,8 +177,10 @@ export function paramForm(app, doc, rows, { layout = "page", expert = false, rea
       : h("span.reset-slot");
     const help = stripUnit(r.info);
     const tipHelp = (expert && layout === "panel") || layout === "grid";
-    const label = h("label.pname", { for: id }, r.changed ? h("span.chg-dot", { title: "changed from the template value" }) : null, h("span", { text: r.key }));
-    if (tipHelp && r.info) { label.dataset.tipTitle = r.key; label.dataset.tip = help || r.info; }
+    const named = !expert && PARAM_NAME[r.key];
+    const label = h("label.pname", { for: id, class: named ? "plain" : "" }, r.changed ? h("span.chg-dot", { title: "changed from the template value" }) : null, h("span", { text: named || r.key }));
+    if (tipHelp && r.info) { label.dataset.tipTitle = named ? `${named} (${r.key})` : r.key; label.dataset.tip = help || r.info; }
+    else if (named) { label.dataset.tipTitle = r.key; label.dataset.tip = "Parameter key in case.json and on the command line"; }
     return h("div.prow", { class: r.changed ? "changed" : "", dataset: { key: r.key } },
       label,
       h("div.pval", {}, control, reset),
@@ -159,9 +193,9 @@ export function paramForm(app, doc, rows, { layout = "page", expert = false, rea
     const fresh = app.paramRows(doc).find((x) => x.key === k);
     if (old && fresh) old.replaceWith(build(fresh));
   };
-  const commit = (k, raw, fromText, unit) => {
+  const commit = (k, raw, fromText, unit, scales) => {
     if (readonly) return;
-    const ok = setParam(app, doc, k, raw, fromText, unit);
+    const ok = setParam(app, doc, k, raw, fromText, unit, scales);
     redraw(k);
     app.paramsChanged(doc);
     if (!ok) { const el = form.querySelector(`#${CSS.escape(`p-${layout}-${k}`)}`); if (el) el.focus(); }
@@ -169,4 +203,9 @@ export function paramForm(app, doc, rows, { layout = "page", expert = false, rea
 
   for (const r of rows) form.appendChild(build(r));
   return form;
+}
+
+// SI unit of a family, for the tooltip of a dimensionless scale ("V", "m", "mol/m³", ...)
+function familyBase(unit) {
+  return unitChoices(unit)[0] || unit;
 }

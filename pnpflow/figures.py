@@ -264,11 +264,13 @@ def sym_tex(name, coord="planar"):
     return _sub(*symbol(name, coord))
 
 
-def frac_label(name, signed=False, coord="planar"):
-    """Stacked-fraction colour-bar label, e.g. c_+ / c_{+,max}."""
+def frac_label(name, signed=False, coord="planar", bulk=False):
+    """Stacked-fraction colour-bar label, e.g. c_+ / c_{+,max} or c_+ / c_{+,bulk}."""
     b, s = symbol(name, coord)
     top = _sub(b, s)
-    if signed or b.startswith("|"):
+    if bulk:
+        den = r"c_{\mathrm{bulk}}" if name == "rho" else _sub("c", s, r"\mathrm{bulk}")
+    elif signed or b.startswith("|"):
         den = (f"|{b}|" if not b.startswith("|") else b)
         den = f"{den}_{{{s + ',' if s else ''}\\max}}"
     else:
@@ -319,8 +321,12 @@ def _axes_size(bbox, width=6.0, max_h=7.0):
     return w, h, True
 
 
-def field_map(folder, name, X, tris, v, bbox, coord="planar", vectors=None):
-    """One field map, normalised colour bar with a stacked-fraction label."""
+def field_map(folder, name, X, tris, v, bbox, coord="planar", vectors=None, bulk=None):
+    """One field map, normalised colour bar with a stacked-fraction label.
+
+    bulk: reference concentration for species and rho (values / bulk, labelled
+    c / c_bulk); None normalises by the field's largest magnitude.
+    """
     v = np.asarray(v, dtype=float)
     vmax_abs = float(np.nanmax(np.abs(v)))
     # A field gets a diverging map only when both signs are substantial (> 5 % of
@@ -337,7 +343,8 @@ def field_map(folder, name, X, tris, v, bbox, coord="planar", vectors=None):
         bbox = [-r, r, bbox[2], bbox[3]]
     tris = _window(X, tris, bbox)
     tri = Triangulation(X[:, 0], X[:, 1], tris)
-    norm_v = v / vmax_abs if vmax_abs > 0 else v
+    ref = bulk if bulk else vmax_abs
+    norm_v = v / ref if ref > 0 else v
     base = field_cmap(name)
     vmin, vmax = float(np.nanmin(norm_v)), float(np.nanmax(norm_v))
     if signed:
@@ -377,9 +384,12 @@ def field_map(folder, name, X, tris, v, bbox, coord="planar", vectors=None):
     else:
         maxname = maxname + r"_{\max}"
     title = TITLES.get(name, "Concentration")
-    ax.set_title(tex(f"{title}, ${maxname} = {num(vmax_abs)}$"), pad=20)
+    if bulk:
+        ax.set_title(tex(title), pad=20)
+    else:
+        ax.set_title(tex(f"{title}, ${maxname} = {num(vmax_abs)}$"), pad=20)
     cax = fig.add_axes([(0.6 + w + 0.5) / W, 0.9 / (h + 1.4), 0.22 / W, h / (h + 1.4)])
-    colorbar(fig, cs, cax, tex(frac_label(name, has_neg, coord)))
+    colorbar(fig, cs, cax, tex(frac_label(name, has_neg, coord, bulk=bool(bulk))))
     return save(fig, folder, "field_" + safe_name(name))
 
 
@@ -558,6 +568,10 @@ def write_run_figures(folder, mesh, fields, profiles, summary, focus=None,
     model = summary.get("model", {}) or {}
     coord = symmetry or model.get("coord") or getattr(mesh, "coord", "planar")
     species = [s["name"] for s in model.get("species", [])]
+    # concentrations (and rho) are shown relative to the bulk; nondimensional
+    # concentrations are already in units of c0, so rho's reference is 1
+    bulk = {s["name"]: float(s.get("bulk", 1.0) or 1.0) for s in model.get("species", [])}
+    bulk["rho"] = 1.0
     X = np.asarray(mesh.X, dtype=float)
     tris = mesh.linear_triangles()
     bbox = list(focus) if focus else [float(X[:, 0].min()), float(X[:, 0].max()),
@@ -581,7 +595,8 @@ def write_run_figures(folder, mesh, fields, profiles, summary, focus=None,
         vec = None
         if name == "|u|" and "uy" in fields and "uz" in fields:
             vec = [np.asarray(fields["uy"], float), np.asarray(fields["uz"], float)]
-        attempt(name, field_map, folder, name, X, tris, v, bbox, coord, vec)
+        attempt(name, field_map, folder, name, X, tris, v, bbox, coord, vec,
+                bulk=bulk.get(name))
 
     for line in (profiles or {}).get("lines", []):
         attempt(line.get("name"), profile_figure, folder, line, species, coord)

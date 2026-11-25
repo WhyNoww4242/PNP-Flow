@@ -54,7 +54,7 @@ class Progress:
                      "fraction": None, "health": None,
                      "tells": {"res_norm": None, "ratio": None, "alpha": None,
                                "min_c": None, "halvings": 0},
-                     "history": []}
+                     "history": [], "pid": os.getpid()}
         self.write()
 
     def set(self, **kw):
@@ -167,10 +167,12 @@ def write_fields(folder, mesh, fields, focus_bbox=None, labels=None):
     write_json(os.path.join(folder, "fields.json"), data)
 
 
-def write_fields_time(folder, model, snapshots, t_per_tau=1.0, digits=5):
+def write_fields_time(folder, model, snapshots, t_per_tau=1.0, digits=5, play=None):
     """fields_time.json: the primary fields (each species, rho, phi) at every output
     time, one value per P2 node like fields.json, for the app's time slider.
-    snapshots = [(t, U)]; the unknown layout is [c_1..c_S, phi, ...] in blocks of n."""
+    snapshots = [(t, U)]; the unknown layout is [c_1..c_S, phi, ...] in blocks of n.
+    play (optional): indices of the snapshots the app's Play button steps through
+    (the case's saved-time grid, without extra required times such as tau = 0.13)."""
     n, S = model.n, len(model.species)
     fields = {}
     for i, sp in enumerate(model.species):
@@ -181,9 +183,11 @@ def write_fields_time(folder, model, snapshots, t_per_tau=1.0, digits=5):
                          for _, U in snapshots]
     fields["phi"] = [_round(U[S * n:(S + 1) * n], digits) for _, U in snapshots]
     t = [float(tt) for tt, _ in snapshots]
-    write_json(os.path.join(folder, "fields_time.json"),
-               {"t": t, "tau": [x / t_per_tau for x in t], "t_per_tau": t_per_tau,
-                "n_nodes": int(n), "fields": fields})
+    data = {"t": t, "tau": [x / t_per_tau for x in t], "t_per_tau": t_per_tau,
+            "n_nodes": int(n), "fields": fields}
+    if play:
+        data["play"] = [int(i) for i in play]
+    write_json(os.path.join(folder, "fields_time.json"), data)
 
 
 # ----------------------------------------------------------------------
@@ -302,3 +306,13 @@ def _streamlines(ax, mesh, fields, bbox):
     uz = LinearTriInterpolator(tri, fields["uz"])(gy, gz)
     ax.streamplot(gy, gz, uy.filled(np.nan), uz.filled(np.nan), color="w",
                   linewidth=0.6, density=1.4, arrowsize=0.6)
+
+
+def fmt_seconds(s):
+    """Seconds with an SI prefix: 1.868e-06 -> "1.868 µs", 0.374 -> "374 ms"."""
+    a = abs(s)
+    if a == 0:
+        return "0 s"
+    for factor, unit in ((1.0, "s"), (1e-3, "ms"), (1e-6, "µs"), (1e-9, "ns"), (1e-12, "ps")):
+        if a >= factor or factor == 1e-12:
+            return f"{s / factor:.4g} {unit}"

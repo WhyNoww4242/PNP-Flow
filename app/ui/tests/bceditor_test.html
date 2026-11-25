@@ -1,0 +1,97 @@
+<!doctype html><meta charset="utf-8"><body><pre id="o">running</pre><div id="root"></div>
+<!-- Boundary condition editor check (bceditor.js, bdiagram.js effectiveBCs / bcWords). It edits a fake project
+     through the editor's own controls and checks what lands in case.json "bcs".
+     Open http://localhost:8766/tests/bceditor_test.html or: msedge --headless=new --dump-dom <url>;
+     the first line says ALL PASS or FAILED n. -->
+<script type="module">
+import { boundaryEditor } from "../js/bceditor.js";
+import { effectiveBCs, bcWords, bcShort } from "../js/bdiagram.js";
+
+const out = []; let fails = 0;
+const check = (name, got, want) => {
+  const ok = JSON.stringify(got) === JSON.stringify(want);
+  if (!ok) fails++;
+  out.push(`${ok ? "ok  " : "FAIL"} ${name}: ${JSON.stringify(got)}${ok ? "" : ` (want ${JSON.stringify(want)})`}`);
+};
+
+// the pore template as a run reports it, with phi_w_mV = 75 mV
+const template = {
+  axis: {}, sdl_side: {}, sdl_face: {},
+  sdl_far: { c: "Dirichlet(value=bulk)", phi: "Dirichlet(value=0.0)" },
+  pore_end: { phi: "Dirichlet(value=phi_end)" },
+  pore_wall: { phi: "Dirichlet(value=phi_w)" },
+};
+const doc = {
+  kind: "case", caseName: "test", caseData: { params: {}, bcs: {} },
+  summary: { model: { boundaries: template, flow: "none" }, params: { phi_w: 2.919, phi_end: 2.919 } },
+};
+const ctx = { params: doc.summary.params, si: true, inputs: { phi_w_mV: 75, phi_end_mV: 75, T: 298.15 } };
+let saves = 0;
+const app = { caseChanged: () => { saves++; }, caseOfRun: () => {} };
+// app.saveCaseNow, ~0.45 s after a change: the document then holds the server's copy of case.json,
+// and the page is not redrawn
+const saveEcho = () => { doc.caseData = structuredClone(doc.caseData); };
+const root = document.getElementById("root");
+const render = (name) => {
+  root.replaceChildren(boundaryEditor(app, doc, name, ctx, { base: effectiveBCs(doc).base, index: 0, onChange: () => render(name), onClose: () => {} }));
+};
+const set = (id, value) => { const el = document.getElementById(id); el.value = value; el.dispatchEvent(new Event("change")); };
+
+// 1. the editor starts from the template's condition, in the unit it was entered
+render("pore_wall");
+check("pore_wall ions start as", document.getElementById("bce-c-type").value, "blocking");
+check("pore_wall potential starts as", document.getElementById("bce-phi-type").value, "fixed");
+check("pore_wall potential value (phi_w_mV)", document.getElementById("bce-phi-value").value, "75");
+check("pore_wall unit", document.getElementById("bce-phi-value-unit").value, "mV");
+check("nothing written yet", doc.caseData.bcs, {});
+
+// 2. a new value is stored with its unit; back to 75 mV removes it again (same as template)
+set("bce-phi-value", "50");
+check("50 mV stored", doc.caseData.bcs, { pore_wall: { phi: { type: "fixed", value: 50, unit: "mV" } } });
+set("bce-phi-value", "75");
+check("back to the template value clears bcs", doc.caseData.bcs, {});
+
+// 3. Stern layer keeps the potential as the metal potential; unit switch keeps the potential
+set("bce-phi-type", "stern");
+check("stern from fixed", doc.caseData.bcs.pore_wall.phi, { type: "stern", coef: 1, ref: 75, unit: "mV" });
+set("bce-phi-coef", "0.8");
+set("bce-phi-ref-unit", "V_T");
+const st = doc.caseData.bcs.pore_wall.phi;
+check("unit switch to V_T", [st.unit, Math.abs(st.ref - 75 / (1000 * 1.380649e-23 * 298.15 / 1.602176634e-19)) < 1e-8, st.coef], ["V_T", true, 0.8]);
+
+// 3b. switch sdl_face to a fixed potential, the save echo arrives, then type a value (no redraw in between)
+render("sdl_face");
+set("bce-phi-type", "fixed");
+saveEcho();
+set("bce-phi-value", "75");
+check("value typed after a save is kept", doc.caseData.bcs.sdl_face && doc.caseData.bcs.sdl_face.phi, { type: "fixed", value: 75, unit: "mV" });
+delete doc.caseData.bcs.sdl_face;
+
+// 4. ions: bulk on an uncharged side wall; words in the table and diagram
+render("sdl_side");
+set("bce-c-type", "bulk");
+check("sdl_side bulk", doc.caseData.bcs.sdl_side, { c: { type: "bulk" } });
+const eff = effectiveBCs(doc);
+check("changed boundaries", [...eff.changed].sort(), ["pore_wall", "sdl_side"]);
+check("table words, sdl_side ions", bcWords("c", eff.bcs.sdl_side.c, ctx), "fixed at bulk concentration");
+check("diagram label, sdl_side", bcShort(eff.bcs.sdl_side, ctx), "c = bulk · no charge");
+check("diagram label, pore_wall", bcShort(eff.bcs.pore_wall, ctx), "no flux · Stern layer");
+set("bce-c-type", "blocking");
+check("back to no flux clears sdl_side", "sdl_side" in doc.caseData.bcs, false);
+
+// 5. Reset to template removes the boundary's entry
+render("pore_wall");
+[...root.querySelectorAll("button")].find((b) => /Reset to template/.test(b.textContent)).click();
+check("reset to template", doc.caseData.bcs, {});
+check("every change saved", saves > 0, true);
+
+// 6. a later run reports template_boundaries: the overlay starts from those, not from the run's own
+doc.summary.template_boundaries = template;
+doc.summary.model.boundaries = Object.assign({}, template, { pore_wall: { phi: "Robin(coef=bc_pore_wall_phi_C, ref=bc_pore_wall_phi)" } });
+check("base = template_boundaries", effectiveBCs(doc).bcs.pore_wall.phi, "Dirichlet(value=phi_w)");
+check("words for the template wall", bcWords("phi", effectiveBCs(doc).bcs.pore_wall.phi, ctx), "fixed at 75 mV (Φ = 2.919)");
+
+out.unshift(fails ? `FAILED ${fails}` : "ALL PASS");
+document.getElementById("o").textContent = out.join("\n");
+root.replaceChildren();
+</script>

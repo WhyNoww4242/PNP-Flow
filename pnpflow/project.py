@@ -31,8 +31,11 @@ DEFAULT_MESH = {
     "paint_growth": 1.2,
 }
 DEFAULT_TIME = {
-    # which times are saved: "template" (the case's own list), "uniform", "log", "list"
-    "save": {"mode": "template", "dtau": 0.05, "n": 20, "tau_min": 1e-4, "list": []},
+    # which times are saved: "template" (the case's own list), "uniform", "log", "list".
+    # "uniform" is spaced evenly from 0 to tau_end, either by count ("by": "count", n_lin
+    # points, linspace) or by step ("by": "dtau"). Default: 100 linearly spaced points.
+    "save": {"mode": "uniform", "by": "count", "n_lin": 100, "dtau": 0.05, "n": 20,
+             "tau_min": 1e-4, "list": []},
     "dt_max": None,          # largest step in tau units (None = template default)
     "max_rejects": 12,       # rejected steps in a row before giving up
 }
@@ -48,6 +51,7 @@ def default_case(template, params, name):
         "figures": {"standard": True},                 # which figures to make (to be extended)
         "mesh": copy.deepcopy(DEFAULT_MESH),
         "time": copy.deepcopy(DEFAULT_TIME),
+        "bcs": {},                                     # boundary conditions changed from the template
     }
 
 
@@ -58,6 +62,7 @@ def normalize(case):
     c.setdefault("params", {})
     c.setdefault("units", {})
     c.setdefault("figures", {"standard": True})
+    c["bcs"] = dict(c.get("bcs") or {})          # {boundary: {"c": {...}, "phi": {...}}}, see runner.apply_case_bcs
     mesh = copy.deepcopy(DEFAULT_MESH)
     mesh.update(c.get("mesh") or {})
     corners = copy.deepcopy(DEFAULT_MESH["corners"])
@@ -67,7 +72,10 @@ def normalize(case):
     time = copy.deepcopy(DEFAULT_TIME)
     time.update(c.get("time") or {})
     save = copy.deepcopy(DEFAULT_TIME["save"])
-    save.update((c.get("time") or {}).get("save") or {})
+    given = (c.get("time") or {}).get("save") or {}
+    if given.get("mode") == "uniform" and "by" not in given:
+        save["by"] = "dtau"                  # files written before "by" existed
+    save.update(given)
     time["save"] = save
     c["time"] = time
     return c
@@ -129,7 +137,14 @@ def save_times(save, tau_end):
     mode = (save or {}).get("mode", "template")
     if mode == "template":
         return None
-    if mode == "uniform":
+    if mode == "uniform" and save.get("by", "dtau") == "count":
+        n = int(save.get("n_lin") or 0)
+        if n < 1:
+            raise ValueError("save N linearly spaced points: N must be >= 1")
+        if n > 5000:
+            raise ValueError(f"save {n} linearly spaced points (limit 5000)")
+        taus = [tau_end * k / n for k in range(1, n + 1)]
+    elif mode == "uniform":
         d = float(save.get("dtau") or 0)
         if not d > 0:
             raise ValueError("save every dtau: dtau must be > 0")

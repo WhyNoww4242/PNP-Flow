@@ -22,7 +22,7 @@ class Analysis:
         self.m = model
         self.asm = assembler
         self.U = jnp.asarray(U)
-        self.params = {k: jnp.asarray(v) for k, v in params.items()}
+        self.params = {k: jnp.asarray(v, dtype=jnp.float64) for k, v in params.items()}
         self.fields, self.p_vert = model.split(np.asarray(U))
         self._boundary_weights()
         self._compile()

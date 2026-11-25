@@ -124,7 +124,7 @@ export function prepareTimeFields(json, mesh) {
     if (out.every(Boolean)) fields[name] = out;
   }
   if (!Object.keys(fields).length) return null;
-  return { t: json.t.map(Number), tau: Array.isArray(json.tau) ? json.tau.map(Number) : null, fields };
+  return { t: json.t.map(Number), tau: Array.isArray(json.tau) ? json.tau.map(Number) : null, play: Array.isArray(json.play) ? json.play.map(Number) : null, fields };
 }
 
 function validBox(b) {

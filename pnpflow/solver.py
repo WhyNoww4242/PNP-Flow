@@ -4,6 +4,7 @@ The residual is assembled with jax (jit + vmap).  The Jacobian of every
 element comes from jax.jacfwd, so no hand-written derivatives are needed.
 Sparse linear systems are solved on the CPU with PARDISO (or SuperLU).
 """
+import ctypes
 import inspect
 import time
 
@@ -59,6 +60,9 @@ class Assembler:
         # csr indptr (unique keys are sorted by row, then column)
         counts = np.bincount(self.csr_rows, minlength=m.ndof)
         self.indptr = np.concatenate([[0], np.cumsum(counts)])
+        # int32 copies shared by every Jacobian, so the linear solver sees one pattern
+        self._csr_indices = self.csr_cols.astype(np.int32)
+        self._csr_indptr = self.indptr.astype(np.int32)
 
     # ------------------------------------------------------------------
     # Jitted kernels
@@ -133,9 +137,13 @@ class Assembler:
 
     # ------------------------------------------------------------------
     def jacobian(self, U, params):
-        data = np.asarray(self.jacobian_values(U, params))
+        return self.csr(self.jacobian_values(U, params))
+
+    def csr(self, data):
+        """CSR matrix with this assembler's sparsity pattern and the given values."""
         n = self.model.ndof
-        return sp.csr_matrix((data, self.csr_cols, self.indptr), shape=(n, n))
+        return sp.csr_matrix((np.asarray(data), self._csr_indices, self._csr_indptr),
+                             shape=(n, n), copy=False)
 
 
 def _pairs(emap):
@@ -150,10 +158,96 @@ def _pairs(emap):
 # Linear solve
 # ----------------------------------------------------------------------
 
+class Pardiso:
+    """MKL PARDISO (real unsymmetric) that keeps its reordering between solves.
+
+    Phase 11 (fill-reducing reordering and symbolic factorisation) depends on the
+    sparsity pattern and is mostly serial: at 1.1M dofs it took 3.5 s of a 5.3 s
+    solve on about 3 of 16 cores. It runs once per pattern; each solve then runs phase 23
+    (numeric factorisation on all cores, then the solve). Phase 11 also picks a pivot
+    matching from the values it saw, so a solve whose relative residual is above
+    `rtol` redoes phase 11 with the current values and solves again.
+    MKL settings are its defaults (iparm[0] = 0), as pypardiso.spsolve used them.
+    """
+
+    MTYPE = 11
+
+    def __init__(self, rtol=1e-8):
+        self.rtol = rtol
+        self._mkl = pypardiso.PyPardisoSolver()      # finds and loads mkl_rt
+        self._pattern = None                         # (indptr, indices) last analysed
+        self._ia = self._ja = None                   # the same, 1-based for MKL
+        self.n_analyses = 0
+
+    def solve(self, A, b):
+        A = A.tocsr()
+        if not A.has_sorted_indices:
+            A = A.sorted_indices()
+        data = np.ascontiguousarray(A.data, dtype=np.float64)
+        b = np.asfortranarray(b, dtype=np.float64)
+        if not self._same_pattern(A):
+            self._analyse(A, data)
+        x = self._call(23, data, b)
+        if self._rel_residual(A, x, b) > self.rtol:
+            self._analyse(A, data)
+            x = self._call(23, data, b)
+        return x
+
+    def _same_pattern(self, A):
+        if self._pattern is None:
+            return False
+        indptr, indices = self._pattern
+        return (A.shape[0] + 1 == len(indptr) and np.array_equal(A.indptr, indptr)
+                and np.array_equal(A.indices, indices))
+
+    def _analyse(self, A, data):
+        self._pattern = (A.indptr.copy(), A.indices.copy())
+        self._ia = A.indptr.astype(np.int32) + 1
+        self._ja = A.indices.astype(np.int32) + 1
+        self._call(11, data, np.zeros((A.shape[0], 1), order="F"))
+        self.n_analyses += 1
+
+    @staticmethod
+    def _rel_residual(A, x, b):
+        bn = np.linalg.norm(b)
+        return np.linalg.norm(A @ x - b) / bn if bn > 0 else 0.0
+
+    def _call(self, phase, data, b):
+        mkl = self._mkl
+        x = np.zeros_like(b)
+        err = ctypes.c_int32(0)
+        i32 = ctypes.POINTER(ctypes.c_int32)
+        f64 = ctypes.POINTER(ctypes.c_double)
+        one = ctypes.byref(ctypes.c_int32(1))
+        mkl._mkl_pardiso(
+            mkl.pt.ctypes.data_as(ctypes.POINTER(mkl._pt_type[0])),
+            one, one,                                        # maxfct, mnum
+            ctypes.byref(ctypes.c_int32(self.MTYPE)),
+            ctypes.byref(ctypes.c_int32(phase)),
+            ctypes.byref(ctypes.c_int32(len(self._ia) - 1)),
+            data.ctypes.data_as(f64), self._ia.ctypes.data_as(i32),
+            self._ja.ctypes.data_as(i32), mkl.perm.ctypes.data_as(i32),
+            ctypes.byref(ctypes.c_int32(1 if b.ndim == 1 else b.shape[1])),  # nrhs
+            mkl.iparm.ctypes.data_as(i32),
+            ctypes.byref(ctypes.c_int32(0)),                 # msglvl
+            b.ctypes.data_as(f64), x.ctypes.data_as(f64), ctypes.byref(err))
+        if err.value != 0:
+            raise RuntimeError(f"PARDISO phase {phase} failed with error {err.value}")
+        return x
+
+
+_pardiso = None
+
+
 def linear_solve(A, b):
-    if pypardiso is not None:
-        return pypardiso.spsolve(A, b)
-    return sp.linalg.spsolve(A.tocsc(), b)
+    """Solve A x = b: PARDISO when installed (reordering reused while the pattern
+    stays the same), else SuperLU."""
+    global _pardiso
+    if pypardiso is None:
+        return sp.linalg.spsolve(A.tocsc(), b)
+    if _pardiso is None:
+        _pardiso = Pardiso()
+    return _pardiso.solve(A, b)
 
 
 # ----------------------------------------------------------------------
@@ -195,7 +289,7 @@ class Newton:
         return bool(np.all(np.asarray(U)[self.conc_ids] > 0.0))
 
     def solve(self, U, params, stage=0):
-        params = {k: jnp.asarray(v) for k, v in params.items()}
+        params = {k: jnp.asarray(v, dtype=jnp.float64) for k, v in params.items()}
         model = self.asm.model
         U = model.apply_dirichlet(jnp.asarray(U), params)
         r0 = self.norm(U, params)

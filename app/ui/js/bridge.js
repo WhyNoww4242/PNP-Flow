@@ -139,16 +139,16 @@ const tauriBridge = {
   },
   // cases are not wired into the desktop shell yet (app/src-tauri): browser dev server only
   caseList: async () => ({ cases: [], dir: "", unsupported: true }),
-  caseDetail: async () => { throw httpError(501, "cases need the dev server (python app/server.py) for now"); },
-  caseJSON: async () => { throw httpError(501, "cases need the dev server for now"); },
+  caseDetail: async () => { throw httpError(501, "the desktop shell does not support cases yet; use the dev server (python app/server.py)"); },
+  caseJSON: async () => { throw httpError(501, "the desktop shell does not support cases yet"); },
   caseFileURL: async () => "",
-  saveCase: async () => { throw httpError(501, "cases need the dev server (python app/server.py) for now"); },
-  buildMesh: async () => { throw httpError(501, "cases need the dev server for now"); },
-  deleteMesh: async () => { throw httpError(501, "cases need the dev server for now"); },
-  runCase: async () => { throw httpError(501, "cases need the dev server for now"); },
+  saveCase: async () => { throw httpError(501, "the desktop shell does not support cases yet; use the dev server (python app/server.py)"); },
+  buildMesh: async () => { throw httpError(501, "the desktop shell does not support cases yet"); },
+  deleteMesh: async () => { throw httpError(501, "the desktop shell does not support cases yet"); },
+  runCase: async () => { throw httpError(501, "the desktop shell does not support cases yet"); },
   launch: (body) => call("launch_run", { request: body }),
   // the Tauri launcher does not pass a device yet: JAX picks (GPU when present)
-  devices: async () => ({ gpu: false, devices: [], error: "device choice is not wired into the desktop shell yet" }),
+  devices: async () => ({ gpu: false, devices: [], error: "the desktop shell does not support the device choice yet" }),
   stop: (name) => call("stop_run", { name }),
   async colormaps() {
     // frontendDist is bundled, so the static file is reachable through fetch here too

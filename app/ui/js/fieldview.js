@@ -68,7 +68,7 @@ export class FieldView {
     e.field = h("select.sel.fv-field", { "aria-label": "Field shown", "data-tip": "Field shown on the map", onchange: (ev) => this.selectField(ev.target.value) });
     const btn = (ic, label, run, extra = {}) => h("button.tool", Object.assign({ type: "button", "aria-label": label, "data-tip-title": label, onclick: run }, extra), icon(ic, 18));
     e.bar = h("div.fv-bar", {}, e.field, h("span.tool-sep", { "aria-hidden": "true" }),
-      btn("home", "Home: zoom to the focus region", () => this.home(), { "data-tip-key": "G" }),
+      btn("home", "Zoom to the focus region", () => this.home(), { "data-tip-key": "G" }),
       btn("zoom-in", "Zoom in", () => this.zoomBy(1.4)),
       btn("zoom-out", "Zoom out", () => this.zoomBy(1 / 1.4)),
       h("span.fv-axgrp", { role: "group", "aria-label": "Scale the x axis" }, h("span.fv-axl", { text: "x" }),
@@ -78,7 +78,7 @@ export class FieldView {
         btn("zoom-out", "Shrink the y axis (Alt + wheel)", () => this.zoomAxis("y", 1 / 1.4)),
         btn("zoom-in", "Stretch the y axis (Alt + wheel)", () => this.zoomAxis("y", 1.4))),
       btn("fit", "Fit the whole mesh to the window (true aspect ratio)", () => this.fitTrue(), { "data-tip-key": "F" }),
-      btn("rescale", "Rescale: fill the window, each axis with its own scale", () => this.rescale()));
+      btn("rescale", "Fill the window, with each axis on its own scale", () => this.rescale()));
     e.tPlay = h("button.tool", { type: "button", "aria-label": "Play the time steps", "data-tip-title": "Play / pause", onclick: () => this.togglePlay() }, icon("play", 16));
     e.tRange = h("input.fv-trange", { type: "range", min: "0", max: "0", step: "1", value: "0", "aria-label": "Time step",
       oninput: (ev) => { this.stopPlay(); this.setTimeIndex(+ev.target.value); } });
@@ -88,7 +88,7 @@ export class FieldView {
     e.bar.appendChild(h("span.spacer"));
     e.bar.appendChild(e.scaleNote);
     e.footer = h("div.fv-footer", {}, e.readout,
-      h("div.fv-hint", { text: "Wheel: zoom · drag: pan · click: probe · double-click: focus" }));
+      h("div.fv-hint", { text: "Wheel zooms · drag pans · click probes · double-click focuses" }));
     setChildren(this.root, h("div.fieldview", {}, e.bar, e.main, e.time, e.footer));
     this.attachInteraction();
     new ResizeObserver(() => this.resize()).observe(e.stage);
@@ -201,6 +201,9 @@ export class FieldView {
     if (!names.length || ts.t.length < 2) return;
     this.finalFields = Object.fromEntries(names.map((k) => [k, this.mesh.fields[k]]));
     this.ts = { t: ts.t, tau: ts.tau, fields: Object.fromEntries(names.map((k) => [k, ts.fields[k]])) };
+    // frames Play steps through: the case's saved-time grid (fields_time.json "play"), else every snapshot
+    const play = Array.isArray(ts.play) ? ts.play.filter((i) => Number.isInteger(i) && i >= 0 && i < ts.t.length) : [];
+    this.playIdx = play.length >= 2 ? play : ts.t.map((_, i) => i);
     this.tIdx = ts.t.length - 1;
     this.el.tRange.max = String(this.tIdx);
     this.el.tRange.value = String(this.tIdx);
@@ -239,13 +242,19 @@ export class FieldView {
   togglePlay() {
     if (this.playTimer) return this.stopPlay();
     if (!this.ts) return;
-    if (this.tIdx >= this.ts.t.length - 1) this.setTimeIndex(0);
+    const frames = this.playIdx;
+    const last = frames[frames.length - 1];
+    if (this.tIdx >= last) this.setTimeIndex(frames[0]);
     setChildren(this.el.tPlay, icon("stop", 16));
     this.el.tPlay.setAttribute("aria-label", "Pause");
+    // about 10 s for the whole run, 60-500 ms per frame (100 frames -> 100 ms)
+    const ms = Math.max(60, Math.min(500, Math.round(10000 / frames.length)));
     this.playTimer = setInterval(() => {
-      if (this.tIdx >= this.ts.t.length - 1) return this.stopPlay();
-      this.setTimeIndex(this.tIdx + 1);
-    }, 500);
+      const next = frames.find((i) => i > this.tIdx);
+      if (next === undefined) return this.stopPlay();
+      this.setTimeIndex(next);
+      if (next >= last) this.stopPlay();
+    }, ms);
   }
 
   stopPlay() {
@@ -650,7 +659,7 @@ export class FieldView {
     if (on) {
       const [a, b] = this.mesh.coordNames;
       const k = 1 / this.view.ky;
-      n.textContent = `Axes not to scale: ${b} is ${k >= 1 ? `compressed ${k.toFixed(k < 10 ? 1 : 0)}x` : `stretched ${(1 / k).toFixed(1 / k < 10 ? 1 : 0)}x`} relative to ${a}`;
+      n.textContent = `Axes not to scale. ${b} is ${k >= 1 ? `compressed ${k.toFixed(k < 10 ? 1 : 0)}x` : `stretched ${(1 / k).toFixed(1 / k < 10 ? 1 : 0)}x`} relative to ${a}`;
     }
   }
 

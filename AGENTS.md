@@ -71,6 +71,12 @@ Details, discretisation and BC table: `docs/THEORY.md`.
    values scattered with `segment_sum` into CSR. Dirichlet rows → `U_i − g_i`.
 5. **Newton** (`solver.Newton`): PARDISO (fallback SuperLU), backtracking that keeps all
    concentrations positive. **Continuation** walks parameters, halving the step on failure.
+   `solver.Pardiso` (behind `linear_solve`) runs MKL's mostly serial reordering (phase 11) once
+   per sparsity pattern and then only factorises + solves (phase 23, all cores); a solve with a
+   relative residual above 1e-8 redoes the reordering. At 1.1M dofs this cut a solve from 5.7 s
+   to 1.4 s and doubled time steps per minute (2026-11-25). `Assembler.csr(data)` builds every
+   Jacobian / mass matrix on one shared int32 pattern. Newton and `Analysis` cast params to
+   float64 so an int or numpy parameter does not recompile the kernels.
 6. **Analysis** (`analysis.py`): reaction-method boundary fluxes, induced wall charge, forces,
    recovered gradients (`E`, vorticity, `N_i`, current), line/wall profiles, and **adjoint
    sensitivities** `dQ/dp` (one extra solve per quantity; `dR/dp` via `jax.jvp`).
@@ -79,7 +85,11 @@ Details, discretisation and BC table: `docs/THEORY.md`.
    DAE). Variable-step BDF2 (first step backward Euler) wraps the steady assembler, so
    `Newton` is reused. A template asks for it with `Setup.transient` (t_end, output times,
    profile/figure callbacks); `runner._run_transient` writes profiles at each output time,
-   `summary.transient`, `solution.npz` (`t`, `U_t`) and live `progress.time`.
+   `summary.transient`, `solution.npz` (`t`, `U_t`) and live `progress.time`. The step log and the app's
+   time bar show real time first when the template sets `transient.s_per_tau` (pore: l_p²/D), then τ,
+   then the solver time t~ = D t / a_ref² (2026-11-24; the bare "t 24.98" used to be read as seconds).
+   The pore template's steady equilibrium check (after the time run, `equilibrium_check`) ramps `phi_w`
+   **and** `phi_end` from 0; ramping only `phi_w` made it fail at every stage from about 75 mV up.
 8. **Output** (`output.py`, `figures.py`, `export.py`, `runner.py`): the run folder with
    `progress.json` (live: `fraction`, `health` = converging | struggling | stalled | failed |
    done, `tells`), `summary.json`, `fields.json`, `profiles.json`, `fields_time.json`
@@ -104,10 +114,18 @@ Details, discretisation and BC table: `docs/THEORY.md`.
      241k triangles / 2.63M dofs; 0.95 → 152k / 1.67M. Changing it changes the mesh key, so
      the next run or `--mesh-only` rebuilds `case.msh`.
    - Time save modes (`project.save_times`): `template` (the template's own list, e.g. the
-     DNS times with `dns_times = 1`), `uniform` (every `dtau`), `log` (`n` from `tau_min`),
-     `list`. τ_end and the template's `required_outputs` (pore: 0.13 and τ_mid) are always
-     saved. Many saved times make `fields_time.json` large (≈ 14 MB per snapshot at 241k
+     DNS times with `dns_times = 1`), `uniform` (`by: "count"`: `n_lin` linearly spaced
+     points τ_end k/N, **the default for new cases, N = 100**; `by: "dtau"`: every `dtau`;
+     old files without `by` read as `dtau`), `log` (`n` from `tau_min`), `list`. τ_end and
+     the template's `required_outputs` (pore: 0.13 and τ_mid) are always saved; the app's
+     Play steps only through the case grid (`fields_time.json` `play`), about 10 s per run. Many saved times make `fields_time.json` large (≈ 14 MB per snapshot at 241k
      triangles).
+   - Boundary conditions (2026-11-24): case.json `bcs` = `{boundary: {"c": spec, "phi": spec}}`, only what
+     differs from the template (types in `docs/DATA_FORMAT.md`). `runner.apply_case_bcs` swaps them in
+     after `build` (before mesh diagnose), each value becoming a parameter `bc_<boundary>_<field>` that ramps
+     from rest with the template's first continuation stage (a literal value stalled Newton on a 50 mV Stern
+     wall); the run records `template_boundaries`. Edited on the Boundaries page (`bceditor.js`); not in the
+     mesh key. Check: `tools/check_case_bcs.py` (Gouy-Chapman, fixed and Stern overrides vs exact).
    - Run names: `run.py --case` without `--name` uses `<case>_<yymmdd>_<HHMMSS>`; the app uses
      `<case>_<yymmdd>_<HHMM>`. Run names are unique across `results/` and all cases.
 
@@ -178,6 +196,7 @@ python app/server.py                       # app at http://localhost:8766 (Study
 python run.py --case cases/my_pore --mesh-only   # build + validate a case's mesh (no solve)
 python run.py --case cases/my_pore --name run1   # run a case -> cases/my_pore/results/run1/
 python tools/check_transient.py            # time-stepper check (BDF2 order 2)
+python tools/check_case_bcs.py             # case.json "bcs" overrides reach the solve (Gouy-Chapman vs exact)
 
 # pore DNS comparison (§6)
 python tools/make_dns_cases.py --coarse narrow          # cases/pore_dns_narrow_coarse/case.json
@@ -207,9 +226,14 @@ equals `t_end`). Exit code −15 means the run was stopped (app Stop / SIGTERM);
 `converged:` line is usually out of memory. Runs started by the app write
 `# launched by app <date>`, the command and the device at the top of `stdout.log`.
 
-Device: the server sets `JAX_PLATFORMS` per run (`/api/launch` `device: auto|cpu|gpu`,
-`/api/devices` probes the GPU). JAX assembly runs on the GPU; the sparse solve (PARDISO) stays on
-the CPU. From the shell: `JAX_PLATFORMS=cuda python run.py ...`.
+Device: the server sets `JAX_PLATFORMS` per run (`/api/launch` and `/api/case/<c>/run`
+`device: cpu|auto|gpu`, **default `cpu`** since 2026-11-25; `/api/devices` probes the GPU). On the GPU
+only JAX assembly moves; the sparse solve (PARDISO) stays on the CPU and is most of an iteration
+(632k dofs: GPU 1.4 s vs CPU 2.1 s per Newton iteration, 1.2 s of it PARDISO either way).
+From the shell: `JAX_PLATFORMS=cuda python run.py ...`.
+CPU use: `run.py` (`use_cpus`) pins itself to all logical CPUs but one (CPU 0 left free) and sets
+`MKL_NUM_THREADS` / `OMP_NUM_THREADS` to that count with `MKL_DYNAMIC=FALSE` (else MKL stops at the
+8 physical cores); `PNPFLOW_THREADS=n` overrides. `stdout.log` starts with `cpu: 15 of 16 logical CPUs`.
 `run.py --list` prints every template with default params + help text as JSON.
 `environment.yml`: gmsh from conda-forge (no system libGLU); `pypardiso` only on x86_64
 (Apple Silicon uses SuperLU); Linux installs `jax[cuda13]` (GPU) automatically.
@@ -244,6 +268,7 @@ pnpflow/export.py    CSV export of profiles (results/<run>/csv/)
 
 tools/validate.sh            validation runs (check_transient + 4 analytic cases)
 tools/check_transient.py     BDF2 exact-solution check
+tools/check_case_bcs.py      case.json "bcs" overrides (fixed potential, Stern) vs exact Gouy-Chapman
 tools/export_csv.py          CSV for old runs          tools/export_fields_time.py  fields_time.json for old runs
 tools/export_colormaps.py    cmasher LUTs -> app/ui/data/colormaps.json
 tools/make_dns_cases.py      create cases/pore_dns_<shape>[_coarse]/case.json (shapes: narrow, converging, diverging, wide,
@@ -280,6 +305,12 @@ app/ui/js/params.js  parameter editor (steps from run.py --list "steps"; unit me
 app/ui/js/meshtools.js  Mesh Validation bar + case mesh tools (density, boundary/region refinement, corners, spray paint)
 app/ui/js/repair.js  "Repair mesh" workspace: failed checks + pan/box/disk/pen/spray/erase on the mesh canvas;
                      spray sets a size, a local density or a curvature-based size; edits case.json `mesh`
+app/ui/js/bdiagram.js  Boundaries page diagram: named boundary curves (case mesh.json or the run's fields.json) as SVG,
+                     labelled, hover-linked to the conditions table, click selects; thin domains stretched (caption says
+                     by how much); conditions in words; effectiveBCs = template conditions + case.json `bcs`
+app/ui/js/bceditor.js  condition editor of the selected boundary (ions, potential; value + unit; reset) -> case.json `bcs`
+app/ui/tests/bceditor_test.html  editor check (headless Edge --dump-dom, first line ALL PASS)
+app/ui/tests/units_test.html  unit-conversion check (open in a browser or headless Edge --dump-dom)
 app/ui/js/units.js   display units (length, potential, concentration, diffusivity, time, permittivity, temperature)
 app/ui/js/fieldview.js, glfield.js, colormaps.js, plots.js, icons.js, util.js   viewer, WebGL, colours, Plotly, icons, helpers
 app/src-tauri/       Tauri 2 shell (never compiled; see app/README.md)
@@ -289,6 +320,7 @@ docs/DATA_FORMAT.md  results folder contract
 docs/MCP.md          agent protocol: tools, gmsh how-to, 2-view render, mesh diagnose
 docs/PLAN.md         build plan in phases + FreeCAD layout mapping (screenshot in docs/)
 docs/ui_design.html  GUI workbook (questions)      docs/ui_answers.md  the answers
+docs/critique_answers.md  the user's answers to the 2026-11-24 UI critique (priorities, verdict wording)
 docs/case_answers.md the user's answers on cases, mesh tools, saved times, units
 docs/pore_answers.md the user's answers for the pore DNS (1 µm paper set-up)
 docs/pore_dns_answers.md, pore_dns_plan.md   DNS comparison runs (10 µm): answers and plan
@@ -312,21 +344,34 @@ PRODUCT.md DESIGN.md impeccable design context (product truth, design tokens)
 | Python install | `environment.yml`; the app creates the env on first run if missing |
 | project file | one human-readable JSON file |
 | model tree | Geometry, Mesh, Materials, Boundary Conditions, Governing Equations, Study, Results; step-by-step construction with status dots |
-| units | SI and dimensionless, toggle; ions from a library, custom, or dimensionless |
+| units | SI and dimensionless, toggle; ions from a library, custom, or dimensionless. **Dimensionless display converts** (2026-11-24, `units.scalesFor`): potentials / V_T (k_B T / e from `T`), lengths / a_ref, concentrations / c0, D, time as τ = D t / l_p², permittivity as ε_r; the parameters that define a scale stay in their unit; stored values never change. Check: `app/ui/tests/units_test.html` (headless Edge `--dump-dom`, first line ALL PASS); `?units=dimensionless` in the URL for a shareable view |
 | geometry | parametric templates, CAD/mesh import, gmsh scripts |
 | continuation | automatic, shown on failure; always visual + numeric convergence tells |
 | results | fields, EDL profiles, I–V, fluxes, forces, sensitivities, convergence, run comparison |
 | exports | CSV, figures (PNG/PDF/SVG), reproducing Python script, interactive HTML report |
 | look | the former HUD's colours and type, left menu with SVG icons + shortcut tooltips, standard menu bar (File, Edit, View…), dark default / follows OS, balanced density |
 | layout reference | FreeCAD 1.1 (user's modified dark theme, `docs/Screenshot 2026-11-21 233015.png`): workbench tabs = construction steps, combo panel (tree + properties), Start page with templates / recent / examples, document tabs, status bar. Mapping and changes: `docs/PLAN.md` §1 |
-| parameters | edited on the page of the step that owns them (Geometry, Mesh, Materials, Boundaries, Equations, Study; unknown names → Study); the panel under the tree only shows on Results |
+| parameters | shown and edited **only** on the page of the step that owns them (Geometry, Mesh, Materials, Boundaries, Equations, Study; unknown names → Study). The Data tab under the tree (Results only) lists one link per step ("Geometry: 6 parameters, 4 differ from template"), never the values themselves (2026-11-24); Expert mode adds the run's derived dimensionless parameters there |
 | mesh validation | **Mesh Validation**: one full-width bar with the counts at the top of the Mesh page; click expands every check (value, limit, note, fix) and a note that problems can slow or break convergence and bias results; opens by itself on a warning/failure |
 | case vs result (`docs/case_answers.md`) | nested: `cases/<case>/case.json` + `mesh/`, runs in `cases/<case>/results/<run>/` (frozen case.json, mesh copy, plots, figures, csv, `convergence.txt`); result inputs are read-only in the app ("Open its case") |
 | mesh tools | toolbar: Create mesh (runs on the CPU; also on the Geometry page), Pan, Box, Disk, Paint (spray), Erase, Density, Boundary refinement, Sharp corners, Validation; "Repair mesh" workspace (failed checks, pen, spray by size / density / curvature); all edit case.json `mesh` |
-| saved times | mode picker: template, every Δτ, N log-spaced, list (τ_end, 0.13 and τ_mid always saved); plus `dt_max`, `max_rejects`; compact Time stepping panel |
+| saved times | mode picker: template, every Δτ, N log-spaced, list (τ_end, 0.13 and τ_mid always saved); plus `dt_max`, `max_rejects`; compact Time stepping panel. Default (2026-11-24): Every Δτ with Linear spacing, N = 100; Play in Results plays those 100 frames |
 | units | unit menu next to every value with a known unit; stored value stays in the template unit; choice saved in case.json `units` |
+| device | CPU by default (Study page, `/api/launch`), all logical CPUs but one per run (2026-11-25) |
 | sizes | clickable elements 10 % bigger than the first version (heights, hit areas, their text) |
 | examples | Start page shows at most 5, ranked by importance: pore_narrow 5, pore_dns_narrow_coarse 4, val_gouy_chapman 4, val_mms 3, val_eo_slit 3 |
+| naming (2026-11-25) | the Start page is called **Home**; each case is shown as a **project** in the app (folders, files and code still say `cases/`, `case.json`) |
+| integrals | Results > Checks shows each time series in `summary.integrals` as a sparkline + last value + count and range, never the raw list |
+| boundaries page (2026-11-24) | the "Where each boundary is" diagram is the **first** panel, same colours as the field viewer; hovering a curve or a row highlights both; **clicking a curve, its label or a table row opens "Condition on <boundary>"** (ions: no flux / bulk / fixed × bulk / set flux; potential: no charge / fixed / Stern / surface charge, potentials in mV or Φ), saved to case.json `bcs`; then the conditions table ("changed" tag per row), then Boundary parameters. Results show the editor read-only. `?b=<boundary>` in the URL selects one |
+| run verdict (2026-11-24, `docs/critique_answers.md`) | Results header shows one verdict ("Converged · 1 warning", "Converged · 1 optional warning", "Not converged"); optional checks (`steady equilibrium solve`, `post-processing: …`, or `optional: true`) never colour the verdict, the Results step dot or the Home card (`pages.js` `CHECK_WORDS`, `api._optional_check`); flag / count checks show words for value and limit |
+| conditions in words | Boundaries table columns Ions / Potential (/ Flow) in plain words; one vocabulary in table and diagram: defaults read **"no flux"** / **"no charge"** (diagram: "no flux, no charge"), set values "fixed at bulk concentration", "fixed at 75 mV (Φ = 2.919)". A parameter value is shown as entered (`phi_w` → input `phi_w_mV`) with the solver's dimensionless value in brackets; dimensionless display shows only "Φ = 2.919". Raw solver text under each in Expert mode |
+| Home projects | most recently used first (case.json or newest run); projects with a run or mesh get cards (≤ 6) with the newest run's thumbnail or the mesh view, the rest a compact list (name, template, mesh, runs, date); the filter box searches projects and runs |
+| colour roles | amber = warnings only; parameters changed from the template get a neutral badge ("N changed from template", "N differ from template" on read-only results), bold name and grey dot; the accent marks actions and selection only ("start here" tag is neutral) |
+| stale runs | `progress.json` carries the solver `pid`; the server checks it is a live `run.py` (`api.solver_pid_status`), and runs without it count as stale when their files are > 10 min old or dated in the future (clock skew), so no spinner is shown for a dead run |
+| names (2026-11-24) | Beginner mode labels parameters with readable names (`params.PARAM_NAME`, key in the tooltip); Expert shows keys. Notes and integral labels render ASCII maths as symbols (`util.prettyMath`: λ_D, Φ_w, l_p², τ) |
+| Checks page | time-dependent runs: Newton plot = final ‖R‖ per accepted step, tolerance line, iterations per step (bars), rejected attempts ringed; Expert mode = every iteration. Integrals use the group's `tau` list as the time axis ("3.522 at τ = 0.13"); limits read as requirements ("must reach 100 %", "none may fail") |
+| Home onboarding | the panel under the tree is hidden on Home; projects without a mesh get "Create mesh" (CPU) in their row; empty Examples offers "Run validation" (starts val_gouy_chapman, val_eo_slit, val_mms, val_charged_sphere on the CPU) |
+| toolbar | result-view buttons carry text (Field, Profiles, Checks, Mesh, Figures, Log); on a result the primary button is "Re-run in project" (opens the project's Study page) or "Re-run"; no "… tools" label |
 | recent runs | Clear recents (Start page) hides the runs listed now, per browser; nothing is deleted; "Show N cleared" restores them |
 
 The build plan, in phases with a check for each: `docs/PLAN.md`.
@@ -410,8 +455,9 @@ number = radius in Å, α = radius / 10 nm; h_radius_n = 6; DNS data to t = 0.03
 ## 8. Physics roadmap (user priority)
 
 1. Project file + generic case (needed by the GUI and MCP for everything below). *Cases done
-   (2026-11-22: case.json per template, mesh tools, time settings); still to do: a generic
-   case that is not tied to a template (geometry, ions, BCs chosen freely), figure selection.*
+   (2026-11-22: case.json per template, mesh tools, time settings); conditions per boundary
+   can be changed in a case (2026-11-24, case.json `bcs`, ions and potential; flow not yet). Still to do: a generic
+   case that is not tied to a template (geometry, ions chosen freely), figure selection.*
 2. Applied potential / current (potentiostat, galvanostat) and **Butler–Volmer** kinetics
    (with Frumkin correction) as new `edge_residual` terms.
 3. Time-dependent: chronoamperometry, CV. *BDF2 time stepping done (2026-11-22, used by
@@ -461,6 +507,8 @@ def apply_custom_style(num_colors: int = 4, cmap: str = "cmr.cosmic_r", cmap_ran
 - Line width 2.5, `frameon=False` legends.
 - Normalised colour bars: horizontal stacked-fraction label with a subscript max, e.g.
   `r'$\displaystyle\frac{c_+}{c_{+,\max}}$'`, never "/max" and never vertical.
+  Concentrations and ρ use the **bulk** as reference (2026-11-25): `c_+/c_{+,bulk}`,
+  `ρ/c_bulk` (`figures.field_map(bulk=)`); φ, |E|, |u| keep `x/x_max`.
 - One title per graph, directly above it, with clear space (pad ≈ 18–24 pt); ticks ≥ 18 pt.
 - Minimal whitespace (≈ 0.3 in margins, never 0 = clipped). ≥ 300 dpi.
 - Save to `results/<run>/figures/<name>.png` (300 dpi) and `results/<run>/svg/<name>.svg`.

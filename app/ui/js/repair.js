@@ -283,10 +283,10 @@ export function repairWorkspace(app, doc, ctx) {
     else if (rp.spray === "density") size = localH(x, y) / Math.max(1.01, rp.density);
     else {
       const q = curvatureAt(x, y, 3 * r);
-      if (!q || !(q.v > 1e-12)) { status("No curved boundary within reach of the brush: nothing sprayed."); return; }
+      if (!q || !(q.v > 1e-12)) { status("No curved boundary is within reach of the brush, so nothing was sprayed."); return; }
       size = Math.max(rp.minSize || 0, 1 / (q.v * Math.max(2, rp.nPerRadius)));
     }
-    if (!addSpot(x, y, r, size, "spray:" + rp.spray)) status(`Limit of ${MAX_SPOTS} spots reached: erase some or use a box/disk region.`);
+    if (!addSpot(x, y, r, size, "spray:" + rp.spray)) status(`Reached the limit of ${MAX_SPOTS} spots. Erase some, or use a box or disk region.`);
     drawCount();
   };
   const eraseAt = (sx, sy) => {
@@ -310,7 +310,7 @@ export function repairWorkspace(app, doc, ctx) {
     }
     addSpot(line[line.length - 1][0], line[line.length - 1][1], r, size, "pen:line");
     line = [];
-    if (!ok) status(`Limit of ${MAX_SPOTS} spots reached: the line was cut short.`);
+    if (!ok) status(`Reached the limit of ${MAX_SPOTS} spots, so the line stops short.`);
     changed(); drawCount();
   };
   const commitPolygon = () => {
@@ -327,7 +327,7 @@ export function repairWorkspace(app, doc, ctx) {
       for (let j = 0; j < m && ok; j++) ok = addSpot(ax + ((bx - ax) * j) / m, ay + ((by - ay) * j) / m, r, size, "pen:polygon");
     }
     poly = [];
-    if (!ok) status(`Limit of ${MAX_SPOTS} spots reached: use a larger pen width or a box/disk region.`);
+    if (!ok) status(`Reached the limit of ${MAX_SPOTS} spots. Use a larger pen width, or a box or disk region.`);
     changed(); drawCount(); draw();
   };
   const edgeAt = (sx, sy) => {
@@ -371,12 +371,12 @@ export function repairWorkspace(app, doc, ctx) {
   // ---- pointer ----
   const HINTS = {
     pan: "Pan: drag to move, wheel to zoom, double-click to fit.",
-    box: "Box: drag a rectangle; elements inside get the size set in Options.",
+    box: "Box: drag a rectangle. Elements inside get the size set in Options.",
     disk: "Disk: press at the centre and drag out the radius.",
-    "pen:line": "Pen, freehand line: drag a line; it refines a strip of the pen width on release.",
-    "pen:polygon": "Pen, polygon: click the corners; double-click or Enter closes and fills it. Esc cancels.",
-    "pen:edges": "Pen, pick edges: click a boundary to refine it along its whole length; click again to remove.",
-    spray: "Spray: drag to paint. What it paints is the Spray menu: size, local density or curvature.",
+    "pen:line": "Pen, freehand line: drag a line. On release it refines a strip as wide as the pen.",
+    "pen:polygon": "Pen, polygon: click the corners. Double-click or Enter closes and fills it. Esc cancels.",
+    "pen:edges": "Pen, pick edges: click a boundary to refine it along its whole length. Click again to remove it.",
+    spray: "Spray: drag to paint. The Spray menu sets what it paints: a size, a local density or a curvature-based size.",
     erase: "Erase: drag over painted spots or regions to remove them.",
   };
   const setHint = () => { hint.textContent = HINTS[rp.tool === "pen" ? `pen:${rp.pen}` : rp.tool]; canvas.dataset.tool = rp.tool === "pen" && rp.pen === "edges" ? "box" : rp.tool; };
@@ -492,15 +492,15 @@ export function repairWorkspace(app, doc, ctx) {
   function drawOptions() {
     const dens = numInput(mesh.density, (v) => { mesh.density = v; changed(); }, { label: "Global density", min: 0 });
     const rows = [];
-    rows.push(h("div.mt-row", {}, field("Global density ×", dens, "1 = template sizes; 2 = every element half as big (≈ 4× elements)")));
+    rows.push(h("div.mt-row", {}, field("Global density ×", dens, "1 keeps the template sizes. 2 halves every element size (about 4× the elements)")));
     rows.push(h("div.mt-row", {},
-      field("Brush / pen width", numInput(rp.r ?? "", (v) => { rp.r = v; rp.penWidth = v; draw(); }, { label: "Brush radius", placeholderText: "auto" }), "Model length units (blank = 3 % of the view)"),
-      field("Element size", numInput(rp.size ?? "", (v) => { rp.size = v; }, { label: "Element size", placeholderText: "auto" }), "Size inside sprayed spots, boxes, disks, the pen and picked edges (blank = half the smallest element)")));
+      field("Brush / pen width", numInput(rp.r ?? "", (v) => { rp.r = v; rp.penWidth = v; draw(); }, { label: "Brush radius", placeholderText: "auto" }), "Model length units (blank uses 3 % of the view)"),
+      field("Element size", numInput(rp.size ?? "", (v) => { rp.size = v; }, { label: "Element size", placeholderText: "auto" }), "Size inside sprayed spots, boxes, disks, the pen and picked edges (blank uses half the smallest element)")));
     if (rp.tool === "spray" && rp.spray === "density") rows.push(h("div.mt-row", {}, field("Local density ×", numInput(rp.density, (v) => { rp.density = v; }, { label: "Local density factor", min: 1 }), "Sprayed spots get the local element size divided by this factor")));
     if (rp.spray === "curvature" || rp.heat || rp.tool === "spray") {
       rows.push(h("div.mt-row", {},
-        field("Elements per radius", numInput(rp.nPerRadius, (v) => { rp.nPerRadius = v; }, { label: "Elements per radius of curvature", min: 1 }), "Size = radius of curvature / this number"),
-        field("Smallest size", numInput(rp.minSize ?? "", (v) => { rp.minSize = v; }, { label: "Smallest curvature size", placeholderText: "none" }), "Floor for curvature-based sizes")));
+        field("Elements per radius", numInput(rp.nPerRadius, (v) => { rp.nPerRadius = v; }, { label: "Elements per radius of curvature", min: 1 }), "Element size is the radius of curvature divided by this number"),
+        field("Smallest size", numInput(rp.minSize ?? "", (v) => { rp.minSize = v; }, { label: "Smallest curvature size", placeholderText: "none" }), "No curvature-based size goes below this")));
       rows.push(h("div.mt-row", {}, h("button.btn.sm", { type: "button", disabled: !curv || !(curv.max > 0) || null, onclick: curvatureAll, "data-tip": "Add spots along every boundary where curvature is above a quarter of the maximum" },
         icon("curvature", 14), "Refine along curved boundaries")));
     }
@@ -514,7 +514,7 @@ export function repairWorkspace(app, doc, ctx) {
   // ---- assemble ----
   drawCount(); drawOptions(); syncBar(); setHint();
   const mainCol = h("div.rp-main", {}, bar, stage,
-    h("div.fv-footer", {}, readout, h("span.fv-hint", { text: "Wheel: zoom · drag: pan or paint · Esc cancels a pen stroke" })));
+    h("div.fv-footer", {}, readout, h("span.fv-hint", { text: "Wheel zooms · drag pans or paints · Esc cancels a pen stroke" })));
   const el = h("section.rp-ws", { "aria-label": "Mesh repair workspace" }, h("div.rp-left", {}, leftSlot, optSlot), mainCol);
 
   const load = () => {
@@ -524,7 +524,7 @@ export function repairWorkspace(app, doc, ctx) {
       hint.textContent = "Loading the mesh…";
       bridge.caseJSON(doc.caseName, "mesh/mesh.json").then((m) => { doc.caseMesh = m; geom = m; prepare(); setHint(); drawOptions(); draw(); })
         .catch((e) => { hint.textContent = `Could not load mesh.json: ${e.message}`; });
-    } else hint.textContent = "Create the mesh once to repair it (Create mesh).";
+    } else hint.textContent = "Press Create mesh first. The repair tools draw on the built mesh.";
   };
   load();
   el._refresh = () => { geom = null; load(); };

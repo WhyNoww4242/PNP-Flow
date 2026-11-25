@@ -26,8 +26,8 @@ function statusBadge(status, text) {
 export function validationBar(doc, checks, { source = "" } = {}) {
   const wrap = h("section.vbar-wrap");
   if (!checks) {
-    setChildren(wrap, h("div.vbar.empty", {}, icon("diagnose", 16), h("b", { text: "Mesh Validation" }),
-      h("span.dim", { text: source || "No validation yet: create the mesh to check it." })));
+    setChildren(wrap, h("div.vbar.empty", {}, icon("diagnose", 16), h("b", { text: "Mesh validation" }),
+      h("span.dim", { text: source || "No validation yet. Create the mesh to check it." })));
     return wrap;
   }
   const counts = {};
@@ -46,7 +46,7 @@ export function validationBar(doc, checks, { source = "" } = {}) {
   const bar = h("button.vbar#mesh-validation-bar", {
     type: "button", class: worst ? `st-${worst}` : "st-pass", "aria-expanded": String(!!doc._vbarOpen), "aria-controls": "vbar-list",
     onclick: () => { doc._vbarOpen = !doc._vbarOpen; draw(); },
-  }, icon("chevron-right", 14), h("b", { text: "Mesh Validation" }),
+  }, icon("chevron-right", 14), h("b", { text: "Mesh validation" }),
     h("span.vbar-counts", {}, ["fail", "warn", "pass", "info"].filter((k) => counts[k]).map((k) => statusBadge(k, `${counts[k]} ${k === "warn" ? (counts[k] > 1 ? "warnings" : "warning") : WORD[k]}`))),
     h("span.spacer"), source ? h("span.dim.small", { text: source }) : null);
   const draw = () => {
@@ -61,7 +61,7 @@ export function validationBar(doc, checks, { source = "" } = {}) {
 /** The Create mesh button (gmsh on the CPU: mesh, validate, two views; no solve). */
 export function createMeshButton(app, doc, busy) {
   return h("button.btn.primary", { type: "button", disabled: busy || null, "data-tip-title": "Create mesh",
-    "data-tip": "Runs on the CPU: gmsh meshes the case, then it is validated and drawn from two views. No solve.",
+    "data-tip": "Runs on the CPU, without a solve. gmsh meshes the project, then the mesh is validated and drawn from two views.",
     onclick: () => app.buildMesh(doc) }, busy ? h("span.spinner.sm") : icon("mesh", 14), busy ? "Creating…" : "Create mesh");
 }
 
@@ -109,7 +109,7 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
   // ---- validation (case mesh/validation.json) ----
   const vSlot = h("div");
   const drawValidation = () => setChildren(vSlot, validationBar(doc, doc.caseValidation ? doc.caseValidation.checks : null,
-    { source: ms.state === "done" ? (ms.up_to_date ? "case mesh, up to date" : "case mesh, out of date") : "" }));
+    { source: ms.state === "done" ? (ms.up_to_date ? "project mesh, up to date" : "project mesh, out of date") : "" }));
   if (doc.caseValidation === undefined && (det.mesh_files || []).includes("mesh/validation.json")) {
     doc.caseValidation = null;
     optional(bridge.caseJSON(doc.caseName, "mesh/validation.json")).then((v) => { doc.caseValidation = v; drawValidation(); }).catch(() => {});
@@ -120,7 +120,7 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
   const rSlot = h("div");
   let grid = null;
   const repairButton = (busy) => h("button.btn", { type: "button", disabled: busy || null, "aria-expanded": String(!!doc._repairOpen),
-    "data-tip-title": "Repair mesh", "data-tip": "Lists the failed and warned mesh checks as a tree, with the fix for each. Where a fix can be applied, one click edits the mesh settings; then create the mesh again.",
+    "data-tip-title": "Repair mesh", "data-tip": "Lists the mesh checks that failed or warned, with the fix for each. A fix that can be applied edits the mesh settings in one click. Then create the mesh again.",
     onclick: () => { doc._repairOpen = !doc._repairOpen; drawRepair(); drawState(); } }, icon("wrench", 14), "Repair mesh");
   const deleteButton = (busy) => {
     const b = h("button.btn", { type: "button", disabled: busy || null, "data-tip-title": "Delete mesh",
@@ -194,11 +194,11 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     const st = (doc.caseDetail && doc.caseDetail.mesh_status) || { state: "none" };
     const n = (st.stats || {}).n_elements;
     let badge, text;
-    if (st.state === "building") { badge = h("span.badge.b-run", {}, h("span.spinner.sm"), "creating"); text = "gmsh is meshing the case on the CPU; validation and views follow."; }
+    if (st.state === "building") { badge = h("span.badge.b-run", {}, h("span.spinner.sm"), "creating"); text = "gmsh is meshing the project on the CPU. Validation and the two views come next."; }
     else if (st.state === "failed") { badge = statusBadge("fail", "mesh failed"); text = st.error || "see mesh/mesh.log"; }
     else if (st.state === "done") {
       badge = st.up_to_date ? statusBadge("pass", "up to date") : statusBadge("warn", "out of date");
-      text = `${fmt(n)} elements, ${fmt(st.n_dofs)} unknowns, built ${String(st.finished || "").replace("T", " ")}${st.up_to_date ? "" : ". Settings changed since: create it again, or Solve does."}`;
+      text = `${fmt(n)} elements, ${fmt(st.n_dofs)} unknowns, built ${String(st.finished || "").replace("T", " ")}${st.up_to_date ? "" : ". Settings changed since then. Create the mesh again, or Solve rebuilds it."}`;
     } else { badge = statusBadge("info", "no mesh yet"); text = "Create the mesh to check it before solving (Solve also creates it)."; }
     const busy = st.state === "building";
     setChildren(stateLine, badge, h("span.mesh-state-txt", { text }), h("span.spacer"),
@@ -226,7 +226,7 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     onchange: () => save() });
   updateEstimate();
   const densityPanel = panel("Global density", h("div.mt-stack", {},
-    h("div.mt-row", {}, field("Density ×", densIn, "1 = template sizes; 2 = every element half as big (≈ 4× elements)"), h("span.range-wrap", {}, h("span.small.dim", { text: "×¼" }), slider, h("span.small.dim", { text: "×4" }))),
+    h("div.mt-row", {}, field("Density ×", densIn, "1 keeps the template sizes. 2 halves every element size (about 4× the elements)"), h("span.range-wrap", {}, h("span.small.dim", { text: "×¼" }), slider, h("span.small.dim", { text: "×4" }))),
     est));
 
   // ---- boundary refinement ----
@@ -269,9 +269,9 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     h("label.chk", {}, h("input#mt-corners", { type: "checkbox", checked: !!c.enabled || null, onchange: (e) => { c.enabled = e.target.checked; save(); app.renderToolbarNow(); } }),
       h("span", { text: "Refine re-entrant and acute corners (found automatically)" })),
     h("div.mt-row", {},
-      field("Size", numInput(c.size || "", (v) => { c.size = v || 0; save(); }, { label: "Corner element size", placeholderText: "auto" }), "Element size at the corner (blank = radius / 8)"),
-      field("Radius", numInput(c.radius || "", (v) => { c.radius = v || 0; save(); }, { label: "Corner radius", placeholderText: "auto" }), "Size held within this distance (blank = 2 % of the domain)"),
-      field("Acute below", numInput(c.max_angle, (v) => { c.max_angle = v; save(); }, { label: "Acute angle limit", min: 0 }), "Interior angles below this (degrees) count as sharp; re-entrant (> 185°) always do")),
+      field("Size", numInput(c.size || "", (v) => { c.size = v || 0; save(); }, { label: "Corner element size", placeholderText: "auto" }), "Element size at the corner (blank uses radius / 8)"),
+      field("Radius", numInput(c.radius || "", (v) => { c.radius = v || 0; save(); }, { label: "Corner radius", placeholderText: "auto" }), "Size held within this distance (blank uses 2 % of the domain)"),
+      field("Acute below", numInput(c.max_angle, (v) => { c.max_angle = v; save(); }, { label: "Acute angle limit", min: 0 }), "Interior angles below this value, in degrees, count as sharp. Re-entrant corners (above 185°) always count")),
     h("div.small.dim", { text: cornersFound ? `${cornersFound.length} corner${cornersFound.length === 1 ? "" : "s"} found at the last build${cornersFound.length ? `: ${cornersFound.map((k) => `(${fmt(k.x, 3)}, ${fmt(k.y, 3)}) ${Math.round(k.angle)}°`).join(", ")}` : ""}` : "Corners are listed after the next build." })));
 
   // ---- paint ----
@@ -280,10 +280,10 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
   const drawPaintCount = () => { paintCount.textContent = `${mesh.paint.length} painted spot${mesh.paint.length === 1 ? "" : "s"}`; };
   drawPaintCount();
   const paintPanel = panel("Spray paint", h("div.mt-stack", {},
-    h("div.small.dim", { text: "Pick the Paint tool and drag over the mesh where you want smaller elements; the Erase tool removes spots." }),
+    h("div.small.dim", { text: "Pick the Paint tool and drag over the mesh where you want smaller elements. The Erase tool removes spots." }),
     h("div.mt-row", {},
-      field("Brush radius", numInput(doc.paintUI.r ?? "", (v) => { doc.paintUI.r = v; draw(); }, { label: "Brush radius", placeholderText: "auto" }), "In model length units (blank = 3 % of the view)"),
-      field("Spot size", numInput(doc.paintUI.size ?? "", (v) => { doc.paintUI.size = v; }, { label: "Element size in painted spots", placeholderText: "auto" }), "Element size inside painted spots (blank = half the smallest element of the last build)"),
+      field("Brush radius", numInput(doc.paintUI.r ?? "", (v) => { doc.paintUI.r = v; draw(); }, { label: "Brush radius", placeholderText: "auto" }), "In model length units (blank uses 3 % of the view)"),
+      field("Spot size", numInput(doc.paintUI.size ?? "", (v) => { doc.paintUI.size = v; }, { label: "Element size in painted spots", placeholderText: "auto" }), "Element size inside painted spots (blank uses half the smallest element of the last build)"),
       field("Growth", numInput(mesh.paint_growth, (v) => { mesh.paint_growth = v; save(); }, { label: "Paint growth rate", min: 1 }))),
     h("div.mt-row", {}, paintCount, h("span.spacer"),
       h("button.btn.sm", { type: "button", onclick: () => { mesh.paint = []; save(); drawPaintCount(); draw(); } }, icon("reset", 14), "Clear paint"))));
@@ -419,7 +419,7 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
   }
   const HINTS = {
     pan: "Pan: drag to move, wheel to zoom, double-click to fit.",
-    box: "Box: drag a rectangle; elements inside get the region size.",
+    box: "Box: drag a rectangle. Elements inside get the region size.",
     disk: "Disk: press at the centre and drag out the radius.",
     paint: "Paint: drag to spray finer elements (brush and spot size in Spray paint).",
     erase: "Erase: drag over painted spots or regions to remove them.",
@@ -505,7 +505,7 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     onchange: (e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v > 0) { view.ky = v; draw(); } else drawScaleBar(); } });
   const stretchNote = h("span.small.dim.mt-stretch-note");
   const scaleBar = h("div.mt-scalebar", {},
-    h("button.btn.sm", { type: "button", "data-tip": "Equal x/y scale, unless the domain is too slender to fit (View A's own rule)", onclick: () => { autoScale(); draw(); } },
+    h("button.btn.sm", { type: "button", "data-tip": "Equal x and y scale, unless the domain is too slender to fit (the rule View A uses)", onclick: () => { autoScale(); draw(); } },
       icon("fit", 14), "Auto scale"),
     h("label.mt-scale-field", {}, "X", scaleXIn), h("label.mt-scale-field", {}, "Y", scaleYIn),
     stretchNote);
@@ -527,7 +527,7 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     setChildren(hint, h("span.spinner.sm"), " Loading the mesh…");
     bridge.caseJSON(doc.caseName, "mesh/mesh.json").then((m) => { doc.caseMesh = m; geom = m; doc._onTool(); draw(); drawBoundaries(); })
       .catch((e) => { hint.textContent = `Could not load mesh.json: ${e.message}`; });
-  } else hint.textContent = "Create the mesh once to draw on it (Create mesh).";
+  } else hint.textContent = "Press Create mesh first. The tools draw on the built mesh.";
 
   // ---- images + template sizes ----
   const views = (det.mesh_files || []).filter((f) => /view_[ab]\.png$/.test(f)).map((f) => {
@@ -536,7 +536,7 @@ export function renderCaseMesh(app, doc, root, { pageShell, panel, imageFigure, 
     return h("figure.img-frame", {}, h("div.img-box", {}, img), h("figcaption", { text: /view_a/.test(f) ? "View A: whole domain by boundary group" : "View B: finest region by element quality" }));
   });
 
-  setChildren(root, pageShell("mesh", "Mesh", "The case's mesh lives in cases/" + doc.caseName + "/mesh/. Tools here change case.json; build to check the result before solving.",
+  setChildren(root, pageShell("mesh", "Mesh", "The case's mesh is stored in cases/" + doc.caseName + "/mesh/. The tools here change case.json. Create the mesh to check the result before solving.",
     h("div.panel.mesh-state-panel", {}, stateLine), wsHost, vSlot,
     grid = h("div.mt-grid", {},
       h("div.stack", {}, densityPanel,

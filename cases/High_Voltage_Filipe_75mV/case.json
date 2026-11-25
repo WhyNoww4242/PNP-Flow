@@ -1,0 +1,97 @@
+{
+ "params": {
+  "alpha_in": 2,
+  "alpha_out": 2,
+  "L_nm": 1000,
+  "a_ref_nm": 10,
+  "c0_mM": 0.948,
+  "eps": 7.0832e-10,
+  "T": 298.15,
+  "D": 1.337e-09,
+  "sdl_radius": 4,
+  "sdl_length": 50,
+  "tau_end": 1,
+  "tau_mid": 0.07,
+  "dns_times": 0,
+  "dns_init": 0,
+  "equilibrium_check": 1,
+  "rtol": 0.002,
+  "err_mixed": 1,
+  "phi_w_mV": 75,
+  "phi_end_mV": 75,
+  "dt0": 0.0005
+ },
+ "units": {},
+ "figures": {
+  "standard": true
+ },
+ "next_run_name": null,
+ "format": 1,
+ "name": "High_Voltage_Filipe_75mV",
+ "template": "pore_charging",
+ "description": "Fig. 8 of Henrique, Zuk & Gupta 2022: wall 75 mV (Psi_D = 2.919), a_p/lambda_D = 2, Bi = 8, l_p = 1 um; run to tau = 0.13",
+ "created": "2026-11-25T00:55:21",
+ "modified": "2026-11-24T21:12:03",
+ "mesh": {
+  "density": 1,
+  "boundaries": [
+   {
+    "boundary": "pore_wall",
+    "size": 0.06124,
+    "layer": 0,
+    "growth": 1.2
+   },
+   {
+    "boundary": "pore_end",
+    "size": 0.06124,
+    "layer": 0,
+    "growth": 1.2
+   }
+  ],
+  "regions": [
+   {
+    "kind": "disk",
+    "x": 2,
+    "y": 0,
+    "r": 0.24495569014908103,
+    "size": 0.03062,
+    "growth": 1.2
+   }
+  ],
+  "corners": {
+   "enabled": false,
+   "size": 0,
+   "radius": 0,
+   "max_angle": 80
+  },
+  "paint": [],
+  "paint_growth": 1.2
+ },
+ "time": {
+  "save": {
+   "mode": "uniform",
+   "by": "count",
+   "n_lin": 100,
+   "dtau": 0.05,
+   "n": 20,
+   "tau_min": 0.0001,
+   "list": [
+    0.01,
+    0.03,
+    0.07,
+    0.13
+   ]
+  },
+  "dt_max": null,
+  "max_rejects": 12
+ },
+ "bcs": {
+  "sdl_face": {
+   "phi": {
+    "type": "fixed",
+    "value": 75,
+    "unit": "mV"
+   }
+  }
+ }
+}

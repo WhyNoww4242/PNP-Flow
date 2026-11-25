@@ -322,7 +322,7 @@ def run_case_api(name, body):
     run = str(body.get("name", ""))
     if not api.NAME_RE.match(run):
         return 400, {"error": "invalid run name (letters, digits, _ . - only)"}
-    device = str(body.get("device") or "auto")
+    device = str(body.get("device") or "cpu")
     if device not in ("auto", "cpu", "gpu"):
         return 400, {"error": "device must be auto, cpu or gpu"}
     st = api.proc_status(run)

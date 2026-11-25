@@ -353,6 +353,7 @@ def build_pore_charging(p):
                              if 0 < t <= p["tau_end"] * (1 + 1e-9)],
         "dt0": p["dt0"], "rtol": p["rtol"], "dt_max": 0.02 * t_per_tau,
         "t_per_tau": t_per_tau,
+        "s_per_tau": 1.0 / tau_per_s,                   # real time: t [s] = tau * s_per_tau
         "profiles": time_profiles,
         "figures": make_figures,
         "equilibrium": bool(p["equilibrium_check"]),
@@ -361,8 +362,10 @@ def build_pore_charging(p):
         "on_accept": on_accept,
         "err_scale": "mixed" if p.get("err_mixed") else "abs",
     }
-    # base/path describe the steady equilibrium solve: phi_w ramped up from 0
-    return Setup(model, [{"phi_w": phi_w}], dict(params, phi_w=0.0),
+    # base/path describe the steady equilibrium solve: wall and end potentials ramped up from 0
+    # together (with phi_end left at its full value, every stage jumped the end by the whole
+    # potential and Newton failed at the first iteration at 75 mV and above)
+    return Setup(model, [{"phi_w": phi_w, "phi_end": params["phi_end"]}], dict(params, phi_w=0.0, phi_end=0.0),
                  focus_bbox=[0.0, a_s, -2.0 * a_s, 6.0 * amax],
                  profiles=equilibrium_lines if p["equilibrium_check"] else None,
                  extra=extra if p["equilibrium_check"] else None,

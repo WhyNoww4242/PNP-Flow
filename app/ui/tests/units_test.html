@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><body><pre id="o">running</pre>
+<!-- Unit conversion check (units.js, dimensionless display). Open http://localhost:8766/tests/units_test.html
+     or: msedge --headless=new --dump-dom <url>; the first line says ALL PASS or FAILED n. -->
+<script type="module">
+import { scalesFor, convert, scaleOf, unitChoices } from "../js/units.js";
+const rows = [
+  { key: "L_nm", value: 1000, unit: "nm" }, { key: "a_ref_nm", value: 10, unit: "nm" },
+  { key: "phi_w_mV", value: 75, unit: "mV" }, { key: "c0_mM", value: 0.948, unit: "mM" },
+  { key: "eps", value: 7.0832e-10, unit: "F/m" }, { key: "T", value: 298.15, unit: "K" },
+  { key: "D", value: 1.337e-9, unit: "m^2/s" }];
+const s = scalesFor(rows);
+const out = []; let fails = 0;
+const near = (a, b, tol = 1e-9) => Math.abs(a - b) <= tol * Math.max(1, Math.abs(b));
+const check = (name, got, want, tol) => { const ok = near(got, want, tol); if (!ok) fails++; out.push(`${ok ? "ok  " : "FAIL"} ${name}: ${got} (want ${want})`); };
+check("V_T [V]", s.potential.factor, 1.380649e-23 * 298.15 / 1.602176634e-19);
+check("75 mV -> V_T", convert(75, "mV", "V_T", s), 75e-3 / s.potential.factor);
+check("phi = 2.919 (summary value)", convert(75, "mV", "V_T", s), 2.919, 1e-3);
+check("L 1000 nm -> a_ref", convert(1000, "nm", "a_ref", s), 100);
+check("c0 0.948 mM -> c0", convert(0.948, "mM", "c0", s), 1);
+check("eps -> eps_r", convert(7.0832e-10, "F/m", "ε_r", s), 7.0832e-10 / 8.8541878128e-12);
+check("1 s -> tau", convert(1, "s", "l_p²/D", s), 1.337e-9 / 1e-12);
+for (const [v, u, d] of [[75, "mV", "V_T"], [1000, "nm", "a_ref"], [0.948, "mM", "c0"], [7.0832e-10, "F/m", "ε_r"], [0.5, "ms", "l_p²/D"], [3.3, "µm", "a_ref"], [-12.5, "mV", "V_T"]])
+  check(`round trip ${v} ${u} via ${d}`, convert(convert(v, u, d, s), d, u, s), v, 1e-11);
+out.push(`defs (stay in own unit): ${[...s.defs].join(", ")}`);
+check("a_ref_nm has no scale", scaleOf("a_ref_nm", "nm", s) === null ? 1 : 0, 1);
+check("L_nm scaled", scaleOf("L_nm", "nm", s) ? 1 : 0, 1);
+check("SI convert unchanged (mV->V)", convert(75, "mV", "V"), 0.075);
+check("choices without scales exclude V_T", unitChoices("mV").includes("V_T") ? 1 : 0, 0);
+const tmpl = scalesFor([{ key: "zeta_mV", value: 25, unit: "mV" }]);
+check("template without T: V_T at 298.15 K", tmpl.potential.factor, 0.0256926, 1e-5);
+check("no a_ref -> no length scale", tmpl.length ? 1 : 0, 0);
+out.unshift(fails ? `FAILED ${fails}` : "ALL PASS");
+document.getElementById("o").textContent = out.join("\n");
+</script>

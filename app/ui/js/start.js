@@ -16,10 +16,10 @@ const TITLES = {
 };
 // Examples: at most five, ranked by importance (5 = most important).
 const EXAMPLES = [
-  { name: "pore_narrow", rank: 5, why: "Pore charging in time (paper DNS set-up, 1 µm pore): the reference pore case" },
-  { name: "pore_dns_narrow_coarse", rank: 4, why: "Pore DNS comparison run (10 µm pore, 111k elements); one check fails, see Checks" },
+  { name: "pore_narrow", rank: 5, why: "Pore charging in time, paper DNS set-up with a 1 µm pore. The reference pore case" },
+  { name: "pore_dns_narrow_coarse", rank: 4, why: "Pore DNS comparison run, 10 µm pore, 111k elements. One check fails (see Checks)" },
   { name: "val_gouy_chapman", rank: 4, why: "Planar double layer against the exact Gouy–Chapman solution" },
-  { name: "val_mms", rank: 3, why: "Manufactured solution: every equation term and boundary-condition type" },
+  { name: "val_mms", rank: 3, why: "Manufactured solution with every equation term and boundary-condition type" },
   { name: "val_eo_slit", rank: 3, why: "Electro-osmotic slit flow against nonlinear Poisson–Boltzmann" },
 ];
 const EXAMPLE_NAMES = new Set(EXAMPLES.map((e) => e.name));
@@ -81,6 +81,13 @@ function thumbImage(r) {
   return box;
 }
 
+// Runs of one project share a long prefix; keep both ends so the date stamp stays visible.
+function shortRunName(name, max = 30) {
+  if (name.length <= max) return name;
+  const tail = (name.match(/_\d{6}_\d{4,6}$/) || [""])[0] || name.slice(-12);
+  return `${name.slice(0, max - tail.length - 1)}…${tail}`;
+}
+
 function runCard(app, r, extra) {
   const st = runStatusWord(r);
   return h("button.rcard", {
@@ -89,7 +96,7 @@ function runCard(app, r, extra) {
   },
   thumbImage(r),
   h("div.rc-body", {},
-    h("span.rc-name", { text: r.name, title: r.name }),
+    h("span.rc-name", { text: shortRunName(r.name), title: r.name }),
     h("span.rc-meta", {}, h("span.rc-status", { class: st.cls, text: st.text })),
     h("span.rc-meta", {}, h("span.rc-case", { text: r.case ? caseTitle(r.case) : "case unknown" }), h("span.rc-date", { text: fmtDate(r.mtime) })),
     extra ? h("span.rc-extra", { text: extra }) : null));
@@ -108,6 +115,9 @@ async function exactError(name) {
   }
 }
 
+const PROJECT_CARDS = 6;
+const VALIDATION = ["gouy_chapman", "eo_slit", "mms", "charged_sphere"];
+
 export function renderStart(app, root) {
   const S = app.S;
   const caseNames = Object.keys(S.cases);
@@ -123,7 +133,7 @@ export function renderStart(app, root) {
         h("div.skel", { style: { height: "12px", width: "85%", marginTop: "6px" } })))));
   } else if (!caseNames.length) {
     tplBody = h("div.empty-row", {}, placeholder("error", "No templates available",
-      h("span", {}, S.casesError || "run.py --list returned no cases.", " The solver must be reachable to create projects; recent runs below still open."),
+      h("span", {}, S.casesError || "run.py --list returned no templates.", " Creating a project needs the solver. Recent runs below still open."),
       h("button.btn.sm", { type: "button", onclick: () => app.loadCases(true) }, icon("refresh", 14), "Try again")));
   } else {
     tplBody = h("div.tpl-list", {}, caseNames.map((n) => {
@@ -133,7 +143,7 @@ export function renderStart(app, root) {
       if (sample) bridge.imageURL(sample.name, sample.thumb).then((url) => setChildren(th, h("img", { src: url, alt: "" }))).catch(() => {});
       return h("button.tpl", {
         type: "button", class: n === "charged_sphere" ? "featured" : "", onclick: () => app.openTemplate(n),
-        "aria-label": `New case from template ${caseTitle(n)}`,
+        "aria-label": `New project from template ${caseTitle(n)}`,
       }, th, h("div.tpl-body", {},
         h("span.tpl-title", {}, h("b", { text: caseTitle(n) }), h("code", { text: n }),
           n === "charged_sphere" ? h("span.tag", { text: "start here" }) : null),
@@ -142,23 +152,65 @@ export function renderStart(app, root) {
     }));
   }
 
-  // --- cases
-  const projects = (S.projects || []).slice().sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+  // --- projects: the most recently used first (case.json or its newest run); up to
+  // PROJECT_CARDS projects with a run or a mesh as cards with a picture (newest run's
+  // thumbnail, else the mesh view), the rest as a compact list
+  const newestRun = {};
+  for (const r of S.runs) if (r.project && (!newestRun[r.project] || r.mtime > newestRun[r.project].mtime)) newestRun[r.project] = r;
+  const lastUsed = (c) => Math.max(c.mtime || 0, (newestRun[c.name] || {}).mtime || 0);
+  const projects = (S.projects || []).slice().sort((a, b) => lastUsed(b) - lastUsed(a));
+  const meshTxt = (m) => (m.state === "done" ? `${fmt(m.n_elements)} elements${m.up_to_date ? "" : ", out of date"}` : m.state === "building" ? "mesh building" : m.state === "failed" ? "mesh failed" : "no mesh yet");
+  const meshCls = (m) => (m.state === "failed" ? "rc-status st-bad" : m.state === "done" && m.up_to_date ? "rc-status st-ok" : "rc-status st-neutral");
+  const runsTxt = (c) => `${c.runs.length} run${c.runs.length === 1 ? "" : "s"}`;
+  const projectThumb = (c) => {
+    const box = h("div.rc-thumb.pc-thumb", {}, icon("folder-open", 26));
+    const show = (url) => { const img = h("img", { src: url, alt: "", loading: "lazy" }); img.addEventListener("load", () => setChildren(box, img)); };
+    const r = newestRun[c.name];
+    if (r && r.thumb) bridge.imageURL(r.name, r.thumb).then(show).catch(() => {});
+    else if ((c.mesh || {}).state === "done") bridge.caseFileURL(c.name, "mesh/view_a.png").then((u) => u && show(u)).catch(() => {});
+    return box;
+  };
   let casesBody;
-  if (!S.projectsLoaded) casesBody = h("div.empty-row", { text: "Loading cases…" });
-  else if (!projects.length) casesBody = h("div.empty-row", { text: `No cases yet. Pick a template below to make one (saved in ${S.casesDir || "cases/"}).` });
-  else casesBody = h("div.cards", {}, projects.map((c) => {
-    const m = c.mesh || {};
-    const meshTxt = m.state === "done" ? `${fmt(m.n_elements)} elements${m.up_to_date ? "" : ", out of date"}` : m.state === "building" ? "mesh building" : m.state === "failed" ? "mesh failed" : "no mesh yet";
-    return h("button.rcard.ccard", { type: "button", "data-run": c.name, "data-case": c.template || "", onclick: () => app.openCase(c.name),
-      "aria-label": `Open case ${c.name}` },
-    h("div.rc-thumb", {}, icon("folder-open", 26)),
-    h("div.rc-body", {},
-      h("span.rc-name", { text: c.name, title: c.name }),
-      h("span.rc-meta", {}, h("span.rc-case", { text: caseTitle(c.template) })),
-      h("span.rc-meta", {}, h("span", { class: m.state === "failed" ? "rc-status st-bad" : m.state === "done" && m.up_to_date ? "rc-status st-ok" : "rc-status st-neutral", text: meshTxt }),
-        h("span.rc-date", { text: `${c.runs.length} run${c.runs.length === 1 ? "" : "s"}` }))));
-  }));
+  if (!S.projectsLoaded) casesBody = h("div.empty-row", { text: "Loading projects…" });
+  else if (!projects.length) casesBody = h("div.empty-row", { text: `No projects yet. Pick a template below to make one (saved in ${S.casesDir || "cases/"}).` });
+  else {
+    // cards for projects that have something to show (a run or a mesh), the rest as rows
+    const pictured = projects.filter((c) => newestRun[c.name] || (c.mesh || {}).state === "done").slice(0, PROJECT_CARDS);
+    const asCards = pictured.length ? pictured : projects.slice(0, 4);
+    const cards = h("div.cards", {}, asCards.map((c) => {
+      const m = c.mesh || {};
+      return h("button.rcard.ccard", { type: "button", "data-run": c.name, "data-case": c.template || "", onclick: () => app.openCase(c.name), "aria-label": `Open project ${c.name}` },
+        projectThumb(c),
+        h("div.rc-body", {},
+          h("span.rc-name.pc-name", { text: c.name, title: c.name }),
+          h("span.rc-meta", {}, h("span.rc-case", { text: caseTitle(c.template) }), h("span.rc-date", { text: fmtDate(lastUsed(c)) })),
+          h("span.rc-meta", {}, h("span", { class: meshCls(m), text: meshTxt(m) }), h("span.rc-date", { text: runsTxt(c) }))));
+    }));
+    const rest = projects.filter((c) => !asCards.includes(c));
+    const createMesh = async (c, btn) => {
+      btn.disabled = true;
+      setChildren(btn, h("span.spinner.sm"), "Starting…");
+      try {
+        await bridge.buildMesh(c.name, "cpu");
+        app.toast(`Creating the mesh of ${c.name} on the CPU. It is checked and drawn from two views when done.`, "ok");
+        app.refreshProjects();
+      } catch (err) {
+        app.toast(`Could not start the mesh of ${c.name}: ${err.message}`, "error");
+        btn.disabled = false; setChildren(btn, icon("mesh", 14), "Create mesh");
+      }
+    };
+    const list = rest.length ? h("div.plist", { role: "list", "aria-label": "Other projects" }, rest.map((c) => {
+      const m = c.mesh || {};
+      const canMesh = m.state !== "done" && m.state !== "building";
+      return h("div.plist-row", { role: "listitem", "data-run": c.name, "data-case": c.template || "" },
+        h("button.plr-open", { type: "button", onclick: () => app.openCase(c.name), "aria-label": `Open project ${c.name}` },
+          icon("folder-open", 14), h("span.plr-name", { text: c.name, title: c.name }), h("span.plr-meta", { text: caseTitle(c.template) })),
+        h("span", { class: meshCls(m), text: meshTxt(m) }), h("span.plr-meta", { text: runsTxt(c) }), h("span.plr-meta", { text: fmtDate(lastUsed(c)) }),
+        canMesh ? h("button.btn.sm.plr-act", { type: "button", "data-tip-title": "Create mesh", "data-tip": "Mesh this project on the CPU (no solve). The mesh is validated and drawn from two views.",
+          onclick: (e) => createMesh(c, e.currentTarget) }, icon("mesh", 14), "Create mesh") : h("span"));
+    })) : null;
+    casesBody = [cards, list];
+  }
 
   // --- recent runs and examples
   // Clear recents hides the runs present now (remembered per browser); nothing is deleted
@@ -173,24 +225,36 @@ export function renderStart(app, root) {
     `Show ${hiddenN} cleared`) : null;
   const examples = EXAMPLES.map((e) => ({ e, r: S.runs.find((x) => x.name === e.name) })).filter((x) => x.r);
   const filterInput = h("input.inp#run-filter", {
-    type: "search", placeholder: "Filter runs  ( / )", value: S.startFilter || "", "aria-label": "Filter runs",
+    type: "search", placeholder: "Filter projects and runs  ( / )", value: S.startFilter || "", "aria-label": "Filter projects and runs",
     oninput: (e) => { S.startFilter = e.target.value; applyFilter(root, S.startFilter); },
   });
 
   let recentBody;
   if (!S.runsLoaded) recentBody = h("div.cards", {}, [0, 1, 2].map(() => h("div.rcard", { "aria-hidden": "true" }, h("div.rc-thumb.skel"), h("div.rc-body", {}, h("div.skel", { style: { height: "12px" } })))));
-  else if (!S.runs.length) recentBody = h("div.empty-row", { text: "No runs yet. Pick a template above and press Solve; results appear here." });
+  else if (!S.runs.length) recentBody = h("div.empty-row", { text: "No runs yet. Pick a template above and press Solve. Results appear here." });
   else if (!recent.length) recentBody = h("div.empty-row", { text: hiddenN ? "Recents cleared. New runs appear here." : "No runs besides the examples yet." });
   else recentBody = h("div.cards", {}, recent.slice(0, 18).map((r) => runCard(app, r)));
 
   const exampleCards = examples.map(({ e, r }) => {
     const card = runCard(app, r, e.why);
     card.querySelector(".rc-body").prepend(importance(e.rank));
-    if (/^val_/.test(r.name)) exactError(r.name).then((t) => { const el = card.querySelector(".rc-extra"); if (el && t) el.textContent = `${e.why}. Error vs exact, ${t}`; });
+    if (/^val_/.test(r.name)) exactError(r.name).then((t) => { const el = card.querySelector(".rc-extra"); if (el && t) el.textContent = `${e.why}. Error against the exact solution, ${t}`; });
     return card;
   });
+  // the validation runs (tools/validate.sh) can be started from here; they take about a minute
+  const missingVal = VALIDATION.filter((c) => !S.runs.some((r) => r.name === `val_${c}`) && S.cases[c]);
+  const valBtn = missingVal.length ? h("button.btn.sm", { type: "button", "data-tip-title": "Run the validation cases",
+    "data-tip": `Starts ${missingVal.map((c) => `val_${c}`).join(", ")} on the CPU: analytic cases whose error against the exact solution shows here when they finish.`,
+    onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      const fails = [];
+      for (const c of missingVal) await bridge.launch({ case: c, name: `val_${c}`, device: "cpu" }).catch((err) => fails.push(`val_${c}: ${err.message}`));
+      if (fails.length) app.toast(`Could not start ${fails.join("; ")}`, "error");
+      else app.toast(`Started ${missingVal.length} validation runs. They appear under Recent runs, then here.`, "ok");
+      app.refreshRuns && app.refreshRuns();
+    } }, icon("play", 14), "Run validation") : null;
   const exBody = examples.length ? h("div.cards", {}, exampleCards)
-    : h("div.empty-row", { text: "No example runs found. Run bash tools/validate.sh to create the validation runs." });
+    : h("div.empty-row.ex-empty", {}, h("span", { text: "No example runs yet. The validation runs compare pnpflow with exact solutions (Gouy–Chapman, electro-osmotic slit, manufactured solution, charged sphere)." }), valBtn);
 
   // --- environment line (replaces FreeCAD's first-start setup for now)
   const env = h("div.start-foot", {},
@@ -201,16 +265,16 @@ export function renderStart(app, root) {
 
   setChildren(root, h("div.page", {}, h("div.page-pad", {}, h("div.start-page", {},
     h("section.section", {},
-      h("div.section-head", {}, h("h2", { text: "Cases" }), h("span.count", { text: S.projectsLoaded ? `${projects.length} in ${S.casesDir || "cases/"}` : "" })),
+      h("div.section-head", {}, h("h2", { text: "Projects" }), h("span.count", { text: S.projectsLoaded ? `${projects.length} in ${S.casesDir || "cases/"}, most recently used first` : "" })),
       casesBody),
     h("section.section", {},
-      h("div.section-head", {}, h("h2", { text: "New case" }), h("span.count", { text: "from a template; saved as cases/<name>/case.json" })),
+      h("div.section-head", {}, h("h2", { text: "New project" }), h("span.count", { text: "from a template, saved as cases/<name>/case.json" })),
       tplBody),
     h("section.section", {},
       h("div.section-head", {}, h("h2", { text: "Recent runs" }), h("span.count", { text: S.runsLoaded ? String(recent.length) : "" }), restore, h("span.spacer"), clearBtn, filterInput),
       recentBody),
     h("section.section", {},
-      h("div.section-head", {}, h("h2", { text: "Examples" }), h("span.count", { text: "ranked by importance: the pore runs and the key validation runs" })),
+      h("div.section-head", {}, h("h2", { text: "Examples" }), h("span.count", { text: "the pore runs and the main validation runs, ranked by importance" })),
       exBody),
     env))));
   applyFilter(root, S.startFilter);
@@ -219,18 +283,18 @@ export function renderStart(app, root) {
 /** Hide run cards that do not match the filter (no re-render, so thumbnails stay). */
 function applyFilter(root, text) {
   const f = (text || "").toLowerCase().trim();
-  for (const grid of root.querySelectorAll(".cards")) {
+  for (const grid of root.querySelectorAll(".cards, .plist")) {
     let shown = 0;
-    for (const card of grid.querySelectorAll(".rcard[data-run]")) {
+    for (const card of grid.querySelectorAll(".rcard[data-run], .plist-row[data-run]")) {
       const hay = `${card.dataset.run} ${card.dataset.case || ""}`.toLowerCase();
       const ok = !f || hay.includes(f);
       card.classList.toggle("hidden", !ok);
       if (ok) shown++;
     }
     let note = grid.nextElementSibling && grid.nextElementSibling.classList.contains("filter-note") ? grid.nextElementSibling : null;
-    if (!shown && f && grid.querySelector(".rcard[data-run]")) {
+    if (!shown && f && grid.querySelector(".rcard[data-run], .plist-row[data-run]")) {
       if (!note) { note = h("div.empty-row.filter-note"); grid.after(note); }
-      note.textContent = `No runs match "${text}".`;
+      note.textContent = `Nothing here matches "${text}".`;
     } else if (note) note.remove();
   }
 }

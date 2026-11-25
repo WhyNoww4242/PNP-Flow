@@ -9,9 +9,10 @@ import traceback
 import jax.numpy as jnp
 import numpy as np
 
+from . import bc as B
 from . import geometry, output, project
 from .analysis import Analysis
-from .cases import CASES
+from .cases import CASES, thermal_potential
 from .solver import Assembler, Newton, continuation
 
 
@@ -90,6 +91,9 @@ def _run(spec, name, params, run_name, folder, progress, plots, log, post, ctx=N
         setup = spec["build"](params)
         minfo = {}
     model = setup.model
+    if ctx and ctx["case"].get("bcs"):
+        post["template_boundaries"] = _describe_bcs(model)
+        apply_case_bcs(setup, ctx["case"]["bcs"], params, log)
     mesh_stats = model.mesh.stats()
     log(f"mesh: {mesh_stats['n_elements']} triangles, {model.ndof} dofs "
         f"({time.time() - t0:.1f}s)")
@@ -196,6 +200,16 @@ def _run_transient(spec, name, params, run_name, folder, progress, plots, log, p
     model, tr = setup.model, setup.transient
     t_end = float(tr["t_end"])
     t_per = float(tr.get("t_per_tau", 1.0))
+    s_per_tau = tr.get("s_per_tau")             # seconds per tau, when the template knows them
+
+    def real(t):
+        """Solver time -> "1.87 µs" (or None without a time scale)."""
+        return None if s_per_tau is None else output.fmt_seconds(t / t_per * s_per_tau)
+
+    def clock_text(t, dt):
+        if s_per_tau is None:
+            return f"t {t:.6g} (tau {t / t_per:.4g})  dt {dt:.3g}"
+        return f"t {real(t):>9}  tau {t / t_per:<9.4g} (solver t {t:<8.6g})  dt {real(dt)}"
     progress.set(state="assembling", message="compiling jax kernels", n_stages=1)
     t1 = time.time()
     asm = Assembler(model)
@@ -208,8 +222,9 @@ def _run_transient(spec, name, params, run_name, folder, progress, plots, log, p
     def on_newton(stage, history, status=None):
         progress.iteration(stage, history, status=status)
         progress.set(fraction=time_fraction(),
-                     message=f"step {stage}: tau = {clock['t'] / t_per:.4g}, "
-                             f"Newton it {history[-1]['it']}")
+                     message=f"step {stage}: tau = {clock['t'] / t_per:.4g}"
+                             + (f", t = {real(clock['t'])}" if s_per_tau else "")
+                             + f", Newton it {history[-1]['it']}")
 
     def on_step(info):
         if info["accepted"]:
@@ -222,6 +237,8 @@ def _run_transient(spec, name, params, run_name, folder, progress, plots, log, p
         progress.set(state="solving", fraction=time_fraction(), health=health, tells=tells,
                      time={"t": clock["t"], "t_end": t_end, "tau": clock["t"] / t_per,
                            "tau_end": t_end / t_per, "dt": info["dt"],
+                           **({"t_s": clock["t"] / t_per * s_per_tau,
+                               "t_end_s": t_end / t_per * s_per_tau} if s_per_tau else {}),
                            "step": clock["step"], "rejects": clock["rejects"]})
 
     newton = Newton(tasm, tol=1e-9, log=lambda *a: None, on_iteration=on_newton)
@@ -231,11 +248,13 @@ def _run_transient(spec, name, params, run_name, folder, progress, plots, log, p
     U0 = model.initial_guess(prm) if U0_given is None else jnp.asarray(U0_given)
     progress.set(state="solving", message="time stepping", fraction=0.0, health="converging")
     outputs, dt_max, max_rejects = list(tr.get("outputs", ())), tr.get("dt_max"), 12
+    grid = None                         # the case's saved-time grid (drives the app's Play)
     if ctx:
         tm = ctx["case"]["time"]
         taus = project.save_times(tm.get("save"), t_end / t_per)
         if taus is not None:
-            outputs = sorted({t * t_per for t in taus} | set(tr.get("required_outputs", ())))
+            grid = [t * t_per for t in taus]
+            outputs = sorted(set(grid) | set(tr.get("required_outputs", ())))
             log(f"saved times: {len(outputs)} ({tm['save'].get('mode')} mode)")
         if tm.get("dt_max"):
             dt_max = float(tm["dt_max"]) * t_per
@@ -246,10 +265,11 @@ def _run_transient(spec, name, params, run_name, folder, progress, plots, log, p
         dt0=tr.get("dt0", 1e-2), dt_max=dt_max, rtol=tr.get("rtol", 1e-3),
         on_output=lambda tt, UU: snapshots.append((float(tt), np.asarray(UU))),
         on_step=on_step, log=log, on_accept=tr.get("on_accept"),
-        err_scale=tr.get("err_scale", "abs"))
+        err_scale=tr.get("err_scale", "abs"), clock_text=clock_text)
     solve_time = time.time() - t1
-    log(f"time stepping: ok={ok}, {len(steps)} steps to t = {t:.6g} "
-        f"(tau = {t / t_per:.4g}) in {solve_time:.1f}s")
+    log(f"time stepping: ok={ok}, {len(steps)} steps to "
+        + (f"t = {real(t)}, " if s_per_tau else "") + f"tau = {t / t_per:.4g} "
+        f"(solver t = {t:.6g}); wall clock {solve_time:.1f}s")
     if not ok:
         progress.set(health="failed", message=f"time step failed at tau = {t / t_per:.4g}")
 
@@ -301,7 +321,11 @@ def _run_transient(spec, name, params, run_name, folder, progress, plots, log, p
     profiles = {"lines": lines + eq_lines}
     output.write_fields(folder, model.mesh, fields, setup.focus_bbox, setup.labels)
     output.write_json(os.path.join(folder, "profiles.json"), _strip(profiles))
-    output.write_fields_time(folder, model, snapshots, t_per)
+    play = None
+    if grid:
+        play = [i for i, (tt, _) in enumerate(snapshots)
+                if any(abs(tt - g) <= 1e-9 * max(abs(g), 1e-300) + 1e-12 * t_end for g in grid)]
+    output.write_fields_time(folder, model, snapshots, t_per, play=play)
     output.write_meshfiles(folder, model.mesh, fields)
     np.savez_compressed(os.path.join(folder, "solution.npz"), U=np.asarray(U),
                         X=model.mesh.X, tri=model.mesh.tri,
@@ -429,6 +453,85 @@ def _describe_bcs(model):
     for name, spec in model.bcs.items():
         out[name] = {k: _bc_text(v) for k, v in spec.items()}
     return out
+
+
+# --- boundary conditions changed in the app (case.json "bcs") ----------------------------
+# {boundary: {"c": spec, "phi": spec}}; a key that is absent keeps the template's condition.
+#   c   : {"type": "blocking"} | {"type": "bulk"} | {"type": "fixed", "value": c/c_bulk}
+#         | {"type": "flux", "value": N.n}
+#   phi : {"type": "natural"} | {"type": "fixed", "value", "unit"} | {"type": "charge", "sigma"}
+#         | {"type": "stern", "coef", "ref", "unit"}
+# unit "mV" turns a potential into units of V_T = k_B T / e with the template's T (298.15 K
+# if it has none); "V_T" (or none) means the value already is dimensionless.
+# Each value becomes a model parameter bc_<boundary>_<field>[_<ion>|_C] that starts at its
+# rest value (0, or the bulk concentration) and reaches its target with the template's first
+# continuation stage, so a large potential is ramped like the template's own.
+def _potential(spec, key, T):
+    v = float(spec[key])
+    return thermal_potential(v, T) if spec.get("unit") == "mV" else v
+
+
+def _case_bc(name, field, spec, species, T):
+    """One case.json condition -> (bc object or None for natural, {param: (rest, target)})."""
+    kind, key = spec.get("type"), f"bc_{name}_{field}"
+    if field == "c":
+        if kind == "blocking":
+            return None, {}
+        if kind == "bulk":
+            return B.Dirichlet("bulk"), {}
+        if kind == "fixed":
+            v = float(spec["value"])
+            return ({s.name: B.Dirichlet(f"{key}_{s.name}") for s in species},
+                    {f"{key}_{s.name}": (s.bulk, v * s.bulk) for s in species})
+        if kind == "flux":
+            return B.Flux(key), {key: (0.0, float(spec["value"]))}
+    elif field == "phi":
+        if kind == "natural":
+            return None, {}
+        if kind == "fixed":
+            return B.Dirichlet(key), {key: (0.0, _potential(spec, "value", T))}
+        if kind == "charge":
+            return B.Charge(key), {key: (0.0, float(spec["sigma"]))}
+        if kind == "stern":
+            c = float(spec["coef"])
+            return (B.Robin(f"{key}_C", key),
+                    {f"{key}_C": (c, c), key: (0.0, _potential(spec, "ref", T))})
+    raise ValueError(f"case.json bcs: {name}: unknown {field!r} condition {spec!r}")
+
+
+def apply_case_bcs(setup, overrides, params, log=print):
+    """Replace the template's conditions by the ones set in the case (case.json "bcs")."""
+    model = setup.model
+    T = float(params.get("T", 298.15))
+    names = set(model.mesh.boundaries)
+    bcs = {k: dict(v) for k, v in model.bcs.items()}
+    ramp = {}
+    for name, fields in overrides.items():
+        if name not in names:
+            raise ValueError(f"case.json bcs: no boundary {name!r} in the mesh "
+                             f"(named: {', '.join(sorted(names))})")
+        spec = bcs.setdefault(name, {})
+        for field, cond in fields.items():
+            if field not in ("c", "phi"):
+                raise ValueError(f"case.json bcs: {name}: only 'c' and 'phi' can be set, not {field!r}")
+            bc, prm = _case_bc(name, field, cond, model.species, T)
+            ramp.update(prm)
+            if bc is None:
+                spec.pop(field, None)
+            else:
+                spec[field] = bc
+            shown = ", ".join(f"{k} = {t:.6g}" for k, (_, t) in prm.items())
+            log(f"  boundary {name}: {field} set by the case: "
+                f"{_bc_text(bc) if bc is not None else 'natural'}{f' ({shown})' if shown else ''}")
+    target = {k: t for k, (_, t) in ramp.items()}
+    model.bcs = bcs
+    model.params.update(target)
+    model._dirichlet_structure()
+    setup.base = dict(setup.base, **{k: r for k, (r, _) in ramp.items()})
+    first = dict(setup.path[0]) if setup.path else {}
+    setup.path = [dict(first, **target)] + list(setup.path[1:])
+    if setup.transient is not None:
+        setup.transient["params"] = dict(setup.transient.get("params", setup.base), **target)
 
 
 def _bc_text(v):

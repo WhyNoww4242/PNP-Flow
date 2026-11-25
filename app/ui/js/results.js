@@ -1,13 +1,13 @@
 // Results workbench: field map, profiles, checks (with convergence and integrals),
 // mesh views + diagnose, figure gallery and log.
 
-import { h, setChildren, fmt, fmtValue, fmtDuration, isNum, prettyName, placeholder, isSignedFieldName } from "./util.js";
+import { h, setChildren, fmt, fmtValue, fmtDuration, isNum, prettyName, prettyMath, placeholder, isSignedFieldName } from "./util.js";
 import { icon } from "./icons.js";
 import { bridge } from "./bridge.js";
-import { plot, baseLayout, seriesColors, residualPlot } from "./plots.js";
+import { plot, baseLayout, seriesColors, residualPlot, stepResidualPlot } from "./plots.js";
 import { colormapSource } from "./colormaps.js";
 import { convergenceSeries } from "./progress.js";
-import { checksList, checkCounts, renderMesh } from "./pages.js";
+import { checksList, checkCountText, runVerdict, verdictBadge, renderMesh } from "./pages.js";
 import { caseTitle } from "./start.js";
 
 export const RESULT_VIEWS = [
@@ -27,17 +27,15 @@ function panel(title, body, extra) {
 export function renderResults(app, doc, root) {
   const view = RESULT_VIEWS.find((v) => v.id === doc.rview) || RESULT_VIEWS[0];
   const s = doc.summary || {};
-  const conv = s.solver ? s.solver.converged : undefined;
   const head = h("div.results-head", {},
     icon(view.icon, 16), h("h2", { text: view.label }),
     h("span.rh-meta", { text: [doc.name, s.case ? caseTitle(s.case) : null, s.created ? String(s.created).replace("T", " ").slice(0, 16) : null].filter(Boolean).join("  ·  ") }),
     h("span.spacer"),
-    conv === true ? h("span.badge.b-ok", {}, icon("check", 12), "converged") : conv === false ? h("span.badge.b-bad", {}, icon("x", 12), "not converged") : null,
-    Array.isArray(s.checks) && s.checks.length ? h("button.btn-link", { type: "button", onclick: () => app.setResultsView("checks"), "aria-label": "Show checks" }, checkCounts(s.checks)) : null);
+    runVerdict(s) ? h("button.btn-link.verdict", { type: "button", onclick: () => app.setResultsView("checks"), "aria-label": "Show checks", "data-tip": Array.isArray(s.checks) && s.checks.length ? checkCountText(s.checks) : "" }, verdictBadge(runVerdict(s))) : null);
   const body = h("div.results-body");
   setChildren(root, h("div.results", {}, head, body));
   if (!doc.name) {
-    setChildren(body, h("div.page", {}, placeholder("empty", "No results yet", "Solve this project in the Study workbench; the field map, profiles, checks and figures appear here when the run finishes.",
+    setChildren(body, h("div.page", {}, placeholder("empty", "No results yet", "Solve on the Study page. The field map, profiles, checks and figures appear here when the run finishes.",
       h("button.btn.primary", { type: "button", onclick: () => app.setWorkbench("study") }, icon("play", 12), "Go to Study"))));
     return;
   }
@@ -55,7 +53,7 @@ async function showField(app, doc, body) {
   }
   if (!doc.listing || !doc.listing.files || !doc.listing.files["fields.json"]) {
     fv.mesh = null;
-    fv.showMessage("empty", "No field data", doc.listing ? "This run has no fields.json (yet). It is written when the run finishes." : "Loading the run…");
+    fv.showMessage("empty", "No field data", doc.listing ? "This run has no fields.json yet. The solver writes it when the run finishes." : "Loading the run…");
     return;
   }
   if (fv.docId === doc.id && fv.mesh && fv.meshKey === app.meshKey(doc)) { fv.resize(); fv.redraw(); return; }
@@ -136,7 +134,7 @@ function showProfiles(app, doc, body) {
 function showChecks(app, doc, body) {
   const s = doc.summary;
   if (!s) {
-    setChildren(body, h("div.page", {}, placeholder("empty", "No summary yet", "summary.json is written when the run finishes; checks and convergence appear then.")));
+    setChildren(body, h("div.page", {}, placeholder("empty", "No summary yet", "The solver writes summary.json when the run finishes. Checks and convergence appear then.")));
     return;
   }
   const checks = Array.isArray(s.checks) ? s.checks : [];
@@ -152,23 +150,58 @@ function showChecks(app, doc, body) {
       }
     } else igRows.push([grp, vals]);
   }
+  const igNotes = igRows.filter(([, v]) => typeof v === "string");
+  // a group's "tau" (or "t") list is the time axis of its other lists, not an integral
+  const timeOf = {};
+  for (const [k, v] of igRows) { const m = /^(.*) · (tau|t)$/.exec(k); if (m && Array.isArray(v)) timeOf[m[1]] = { name: m[2] === "tau" ? "τ" : "t", v }; }
+  const isAxis = (k, v) => Array.isArray(v) && / · (tau|t)$/.test(k);
+  const igData = igRows.filter(([k, v]) => typeof v !== "string" && !isAxis(k, v))
+    .map(([k, v]) => { const g = k.replace(/ · [^·]+$/, ""); const tm = timeOf[g]; return [k, v, tm && Array.isArray(v) && tm.v.length === v.length ? tm : null]; });
   const notes = Array.isArray(s.notes) ? s.notes : s.notes ? [String(s.notes)] : [];
+  // time-dependent runs: one point per step (Beginner); every Newton iteration in Expert mode
+  const steps = s.transient && Array.isArray(s.transient.steps) ? s.transient.steps.filter((st) => isNum(st.res_final)) : [];
+  const stepView = steps.length > 0 && !app.S.expert;
+  const rejected = steps.reduce((a, st) => a + (st.rejects || 0), 0);
   const err = s.error || (doc.progress && doc.progress.state === "failed" ? doc.progress.message : null);
   setChildren(body, h("div.page", {}, h("div.page-pad", {}, h("div.stack", { style: { maxWidth: "1240px" } },
     err ? h("div.msg.msg-error", { role: "alert" }, icon("x-circle", 16), h("div", {}, h("b", { text: "The run failed. " }), h("span.mono", { text: String(err).trim().split(/\n/).pop() }))) : null,
-    panel("Checks", checks.length ? checksList(checks) : h("div.dim", { text: "This run reports no checks." }), checks.length ? checkCounts(checks) : null),
+    panel("Checks", checks.length ? checksList(checks) : h("div.dim", { text: "This run reports no checks." }), checks.length ? h("span.small.dim", { text: checkCountText(checks) }) : null),
     h("div.grid2", {},
       panel("Newton convergence", [convEl, h("div.small.dim", { text: [
         isNum(solver.n_newton_total) ? `${solver.n_newton_total} Newton iterations` : null,
-        Array.isArray(solver.stages) ? `${solver.stages.length} continuation stage${solver.stages.length === 1 ? "" : "s"}` : null,
+        stepView ? `${s.transient.n_steps} accepted time steps, ${rejected} rejected attempts (ringed)`
+          : s.transient && isNum(s.transient.n_steps) ? `${s.transient.n_steps} time steps; every residual of every step and rejected attempt is plotted`
+          : Array.isArray(solver.stages) ? `${solver.stages.length} continuation stage${solver.stages.length === 1 ? "" : "s"}` : null,
         isNum(solver.time_s) ? `solve time ${fmtDuration(solver.time_s)}` : null].filter(Boolean).join(", ") })]),
-      igRows.length ? panel("Integrals", h("table.kv", {}, h("tbody", {}, igRows.slice(0, 40).map(([k, v]) => h("tr", {}, h("th", { text: k }), h("td.mono.num", { text: fmtValue(v) })))))) : null),
-    notes.length ? panel("Notes", h("ul", { style: { margin: 0, paddingLeft: "18px" } }, notes.map((n) => h("li", { text: n })))) : null))));
+      igData.length ? panel("Integrals", [h("table.kv", {}, h("tbody", {}, igData.slice(0, 40).map(([k, v, tm]) => h("tr", {}, h("th", { text: prettyMath(k), title: k }), h("td", {}, integralCell(v, tm)))))),
+        igNotes.map(([k, v]) => h("p.small.dim.ig-note", {}, h("b", { text: `${k.replace(/ · note$/, "")}: ` }), prettyMath(v)))]) : null),
+    notes.length ? panel("Notes", h("ul", { style: { margin: 0, paddingLeft: "18px" } }, notes.map((n) => h("li", { text: prettyMath(n) })))) : null))));
   const series = convergenceSeries(s, doc.progress);
   requestAnimationFrame(() => {
+    if (stepView) return stepResidualPlot(convEl, steps, { tol: isNum(solver.tol) ? solver.tol : 1e-9, tPerTau: s.transient.t_per_tau });
     if (!series.length) return setChildren(convEl, placeholder("empty", "No iteration history"));
     residualPlot(convEl, series, { label: doc.progress && doc.progress.time ? "time step" : "stage" });
   });
+}
+
+// One integral value: a number, a short note, or a time series. A series is shown as
+// its count, range and last value with a sparkline; the full list is in summary.json.
+function integralCell(v, tm) {
+  const nums = Array.isArray(v) && v.length > 4 && v.every(isNum) ? v : null;
+  if (!nums) return h("span.mono.num", { text: fmtValue(v) });
+  let lo = Infinity, hi = -Infinity;
+  for (const x of nums) { if (x < lo) lo = x; if (x > hi) hi = x; }
+  const W = 120, H = 22, span = hi - lo || 1;
+  const pts = nums.map((x, i) => `${((i / (nums.length - 1)) * W).toFixed(1)},${(H - 2 - ((x - lo) / span) * (H - 4)).toFixed(1)}`).join(" ");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "ig-spark"); svg.setAttribute("aria-hidden", "true");
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  line.setAttribute("points", pts); svg.appendChild(line);
+  const at = tm ? ` at ${tm.name} = ${fmt(tm.v[tm.v.length - 1])}` : "";
+  const over = tm ? `${nums.length} values over ${tm.name} = ${fmt(tm.v[0])} to ${fmt(tm.v[tm.v.length - 1])}; range ${fmt(lo)} to ${fmt(hi)}` : `${nums.length} values, ${fmt(lo)} to ${fmt(hi)}`;
+  return h("span.ig-series", { title: `${over}. Full list in summary.json` }, svg,
+    h("span.mono.num", { text: fmt(nums[nums.length - 1]) }), h("span.dim.small", { text: at }),
+    h("span.dim.small.ig-over", { text: over }));
 }
 
 function showMesh(app, doc, body) {
@@ -183,7 +216,7 @@ function showFigures(app, doc, body) {
     { title: "Quick plots", note: "plots/", files: (l.plots || []).filter((f) => /\.png$/i.test(f)).map((f) => `plots/${f}`) },
   ].filter((g) => g.files.length);
   if (!groups.length) {
-    setChildren(body, h("div.page", {}, placeholder("empty", "No figures", "This run has no figures/*.png or plots/*.png. Figures are written automatically when a run finishes.")));
+    setChildren(body, h("div.page", {}, placeholder("empty", "No figures", "This run has no figures/*.png or plots/*.png. Every run writes its figures when it finishes.")));
     return;
   }
   const all = groups.flatMap((g) => g.files);

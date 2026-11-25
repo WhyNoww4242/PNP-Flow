@@ -1,20 +1,21 @@
 // Workbench pages for the construction steps: Geometry, Mesh, Materials,
 // Boundaries, Equations and Study (solve + live status). Results live in results.js.
 //
-// Editing geometry, ions and boundary conditions needs the project file
-// (docs/PLAN.md Phase 1); until then these pages show what the template or run
-// defines, and parameters are edited in the Data tab.
+// Each page edits its step's parameters in the project (case.json); the Boundaries page
+// also sets the condition per boundary (case.json "bcs", bceditor.js). Results are read-only.
 
 import { h, setChildren, fmt, fmtValue, isNum, prettyName, placeholder } from "./util.js";
 import { icon } from "./icons.js";
 import { bridge } from "./bridge.js";
 import { plot, baseLayout, seriesColors, residualPlot } from "./plots.js";
 import { boundaryColor } from "./fieldview.js";
+import { boundaryDiagram, highlightBoundary, bcWords, bcShort, effectiveBCs, BC_QTY } from "./bdiagram.js";
+import { boundaryEditor } from "./bceditor.js";
 import { runStatus, healthBadge, stageBars, timeBar, tellsGrid, convergenceSeries } from "./progress.js";
 import { caseTitle, caseDoc } from "./start.js";
 import { paramForm, rowsOf, setParam, shownUnit } from "./params.js";
 import { validationBar, renderCaseMesh, meshStrip } from "./meshtools.js";
-import { convert } from "./units.js";
+import { convert, scalesFor } from "./units.js";
 
 function panel(title, body, extra) {
   return h("section.panel", {}, h("header.panel-head", {}, h("h2", { text: title }), h("span.spacer"), extra || null), h("div.panel-body", {}, body));
@@ -50,27 +51,77 @@ export function checkStatusBadge(status) {
   return h("span.badge", { class: cls }, icon(ic, 12), word);
 }
 
-export function checksList(checks, { withFix = false } = {}) {
-  const order = { fail: 0, warn: 1, pass: 2, info: 3 };
-  const sorted = (checks || []).slice().sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
-  return h("div.checks-list", { role: "table" },
-    h("div.check.check-head", { role: "row" }, ["status", "check", "value", "limit", "note"].map((t, i) => h("span", { role: "columnheader", text: t, style: i === 2 || i === 3 ? { textAlign: "right" } : null }))),
-    sorted.map((c) => h("div.check", { role: "row" },
-      h("span", {}, checkStatusBadge(c.status)),
-      h("span.c-name", { text: c.name || "" }),
-      h("span.c-val", { text: c.value === undefined || c.value === null ? "–" : fmtValue(c.value) }),
-      h("span.c-lim", { text: c.limit === undefined || c.limit === null ? "" : fmtValue(c.limit) }),
-      h("span.c-note", {}, c.note || "", withFix && c.fix && c.status !== "pass" ? h("div", { text: `Fix: ${c.fix}` }) : null))));
+// Checks whose value / limit are flags or counts get words; `optional` checks do not
+// decide whether the run can be trusted (the steady pre-solve after a transient run,
+// a failed figure). Runs may also carry value_text / limit_text / optional themselves.
+const CHECK_WORDS = [
+  [/^steady equilibrium solve$/, () => ({ value: "not converged", limit: "should converge", optional: true,
+    note: "Optional steady solve after the time run. The time-dependent result is unaffected." })],
+  [/^time integration reached t_end$/, (c) => ({ value: `${fmt(100 * c.value, 3)} % of t_end`, limit: "must reach 100 %" })],
+  [/^mesh diagnose$/, (c) => ({ value: `${fmt(c.value)} failed`, limit: "none may fail" })],
+  [/^post-processing: /, () => ({ value: "failed", limit: "", optional: true })],
+];
+
+export function checkWords(c) {
+  const hit = CHECK_WORDS.find(([re]) => re.test(c.name || ""));
+  const w = hit ? hit[1](c) : {};
+  const num = (v) => (v === undefined || v === null ? "" : fmtValue(v));
+  return {
+    value: c.value_text ?? w.value ?? (c.value === undefined || c.value === null ? "–" : num(c.value)),
+    limit: c.limit_text ?? w.limit ?? num(c.limit),
+    optional: c.optional ?? w.optional ?? false,
+    note: w.note && c.status !== "pass" ? `${c.note ? `${c.note}. ` : ""}${w.note}` : c.note || "",
+  };
 }
 
-export function checkCounts(checks) {
+export function checksList(checks, { withFix = false } = {}) {
+  const order = { fail: 0, warn: 1, pass: 2, info: 3 };
+  const rows = (checks || []).map((c) => ({ c, w: checkWords(c) }))
+    .sort((a, b) => (a.w.optional - b.w.optional) || (order[a.c.status] ?? 9) - (order[b.c.status] ?? 9));
+  return h("div.checks-list", { role: "table" },
+    h("div.check.check-head", { role: "row" }, ["status", "check", "value", "limit", "note"].map((t, i) => h("span", { role: "columnheader", text: t, style: i === 2 || i === 3 ? { textAlign: "right" } : null }))),
+    rows.map(({ c, w }) => h("div.check", { role: "row" },
+      h("span", {}, checkStatusBadge(c.status)),
+      h("span.c-name", {}, c.name || "", w.optional ? h("span.c-opt", { text: "optional" }) : null),
+      h("span.c-val", { text: w.value }),
+      h("span.c-lim", { text: w.limit }),
+      h("span.c-note", {}, w.note, withFix && c.fix && c.status !== "pass" ? h("div", { text: `Fix: ${c.fix}` }) : null))));
+}
+
+/** Count of checks by status as plain text, e.g. "4 pass, 1 optional warning". */
+export function checkCountText(checks) {
   const counts = {};
-  for (const c of checks || []) counts[c.status] = (counts[c.status] || 0) + 1;
-  return h("span.check-sum", {}, ["fail", "warn", "pass", "info"].filter((k) => counts[k]).map((k) => {
-    const b = checkStatusBadge(k);
-    b.lastChild.textContent = `${counts[k]} ${k === "warn" ? "warning" : k}`;
-    return b;
-  }));
+  for (const c of checks || []) {
+    const k = checkWords(c).optional && c.status !== "pass" ? `opt-${c.status}` : c.status;
+    counts[k] = (counts[k] || 0) + 1;
+  }
+  const word = { fail: "failed", warn: "warning", pass: "pass", info: "info", "opt-fail": "optional failed", "opt-warn": "optional warning", "opt-info": "optional info" };
+  return ["fail", "warn", "pass", "info", "opt-fail", "opt-warn", "opt-info"].filter((k) => counts[k])
+    .map((k) => `${counts[k]} ${word[k]}${/warn$/.test(k) && counts[k] > 1 ? "s" : ""}`).join(", ");
+}
+
+/**
+ * One verdict for a run: solver convergence plus the checks, e.g. "Converged · 1 warning".
+ * Optional checks never change the colour; when they are all that is left they are named.
+ */
+export function runVerdict(s) {
+  const conv = s.solver ? s.solver.converged : undefined;
+  const all = Array.isArray(s.checks) ? s.checks : [];
+  const req = all.filter((c) => !checkWords(c).optional);
+  const n = (st) => req.filter((c) => c.status === st).length;
+  const fails = n("fail"), warns = n("warn");
+  const optBad = all.length - req.length - all.filter((c) => checkWords(c).optional && c.status === "pass").length;
+  if (conv === false) return { cls: "b-bad", ic: "x", text: "Not converged" };
+  const head = conv === true ? "Converged" : "Finished";
+  if (fails) return { cls: "b-bad", ic: "x", text: `${head} · ${fails} check${fails > 1 ? "s" : ""} failed` };
+  if (warns) return { cls: "b-warn", ic: "alert", text: `${head} · ${warns} warning${warns > 1 ? "s" : ""}` };
+  if (conv !== true) return null;
+  if (optBad) return { cls: "b-ok", ic: "check", text: `${head} · ${optBad} optional warning${optBad > 1 ? "s" : ""}` };
+  return { cls: "b-ok", ic: "check", text: req.length ? `${head} · all checks pass` : head };
+}
+
+export function verdictBadge(v) {
+  return v ? h("span.badge", { class: v.cls }, icon(v.ic, 12), v.text) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,19 +131,19 @@ export function stepParams(app, doc, step, title, empty, { layout = "page" } = {
   const n = rows.filter((r) => r.changed).length;
   const readonly = doc.kind === "run";
   return h("section.panel#step-params", {}, h("header.panel-head", {}, h("h2", { text: title }), h("span.spacer"),
-      h("span.badge.b-warn.step-count", { dataset: { step }, hidden: !n || null }, `${n} changed`)),
+      h("span.badge.b-neutral.step-count", { dataset: { step }, hidden: !n || null }, `${n} ${readonly ? "differ" : "changed"} from template`)),
     h("div.panel-body.flush", {}, paramForm(app, doc, rows, { layout, empty, readonly, expert: app.S.expert })),
     readonly ? resultFoot(app, doc)
-      : h("div.panel-foot", { text: `Saved in cases/${doc.caseName}/case.json; applies to the next solve.` }));
+      : h("div.panel-foot", { text: `Saved in cases/${doc.caseName}/case.json. The next solve uses it.` }));
 }
 
 /** Footer of a result's (read-only) inputs: go to the case to change them. */
 function resultFoot(app, doc) {
   const proj = (doc.listing && doc.listing.project) || null;
   return h("div.panel-foot.row", {},
-    h("span", { text: "Inputs of this result; they are fixed. " }),
+    h("span", { text: "The inputs of this result are read-only. " }),
     h("button.btn-link", { type: "button", onclick: () => app.caseOfRun(doc) },
-      proj ? `Open its case (${proj}) to change them` : "New case from these inputs"));
+      proj ? `Open its project (${proj}) to change them` : "New project from these inputs"));
 }
 
 // ---------------------------------------------------------------------------
@@ -100,7 +151,7 @@ export function renderGeometry(app, doc, root) {
   const c = app.caseOf(doc);
   const bnames = app.boundaryNames(doc);
   const sym = app.symmetryOf(doc);
-  const params = stepParams(app, doc, "geometry", "Geometry parameters", "This template has no geometry parameters: its shape is fixed.");
+  const params = stepParams(app, doc, "geometry", "Geometry parameters", "This template has no geometry parameters. Its shape is fixed.");
   const tpl = panel("Template", kv([
     ["template", h("span", {}, caseTitle(doc.case), " ", h("code", { text: doc.case }))],
     ["coordinates", sym === "axisym" ? "axisymmetric (r, z), r ≥ 0" : sym === "planar" ? "planar 2D (y, z)" : "known after the first solve"],
@@ -108,7 +159,7 @@ export function renderGeometry(app, doc, root) {
   ]));
   const bnd = panel("Named boundaries", bnames.length ? h("table.tbl", {}, h("tbody", {}, bnames.map((b, i) =>
     h("tr", {}, h("th", {}, h("span.swatch", { class: /axis|symmetry/.test(b) ? "dashed" : "", style: /axis|symmetry/.test(b) ? { borderColor: boundaryColor(b, i), width: "14px" } : { background: boundaryColor(b, i) } })),
-      h("td.mono", { text: b }), h("td.dim.small", { text: app.bcSummary(doc, b) })))))
+      h("td.mono", { text: b }), h("td.dim.small", { text: /axis|symmetry/.test(b) ? "symmetry axis" : bcShort(effectiveBCs(doc).bcs[b], bcContext(app, doc)) })))))
     : h("div.dim", { text: "Boundary names are known after the mesh is built (solve once)." }));
   const views = (doc.listing && doc.listing.mesh_files || []).filter((f) => /view_a/.test(f));
   setChildren(root, pageShell("geometry", "Geometry",
@@ -116,7 +167,7 @@ export function renderGeometry(app, doc, root) {
     doc.kind === "case" && doc.caseDetail ? meshStrip(app, doc) : null,
     h("div.grid2", {}, h("div.stack", {}, params, tpl), h("div.stack", {},
       views.length ? imageFigure(app, doc, views[0], "Domain of the last solve, boundaries coloured by group") : null, bnd)),
-    stub("CAD and mesh import and gmsh scripts arrive with the project file. Today the template builds the shape from the parameters above.")));
+    stub("Importing CAD or meshes and editing gmsh scripts need the project file, which is not built yet. Today the template builds the shape from the parameters above.")));
 }
 
 export function renderMesh(app, doc, root, { resultOnly = false } = {}) {
@@ -160,7 +211,7 @@ export function renderMesh(app, doc, root, { resultOnly = false } = {}) {
         { displayModeBar: false });
     });
   }
-  setChildren(root, pageShell("mesh", "Mesh", "Every mesh is rendered from two views and diagnosed before it is trusted.", ...content));
+  setChildren(root, pageShell("mesh", "Mesh", "Every mesh is rendered from two views and validated before a solve.", ...content));
 }
 
 // ---------------------------------------------------------------------------
@@ -169,41 +220,86 @@ export function renderMaterials(app, doc, root) {
   const species = (s.model && Array.isArray(s.model.species)) ? s.model.species : null;
   let spBody;
   if (species === null) spBody = h("div.dim", { text: doc.kind === "draft" ? "The species list is written when the template is solved." : "This run does not list its species." });
-  else if (!species.length) spBody = h("div", {}, h("p", { style: { margin: "0 0 6px" } }, "No mobile ions: this model solves the Poisson equation only (fixed charge in a uniform dielectric)."));
+  else if (!species.length) spBody = h("div", {}, h("p", { style: { margin: "0 0 6px" } }, "No mobile ions. This model solves the Poisson equation only, for a fixed charge in a uniform dielectric."));
   else spBody = h("table.tbl", {}, h("thead", {}, h("tr", {}, ["species", "valence z", "diffusivity D / D0", "bulk c / c0"].map((t, i) => h("th", { class: i ? "num" : "", text: t })))),
     h("tbody", {}, species.map((sp) => h("tr", {}, h("th", { text: prettyName(sp.name) }), h("td.num", { text: `${sp.z > 0 ? "+" : ""}${fmt(sp.z)}` }), h("td.num", { text: fmt(sp.d) }), h("td.num", { text: fmt(sp.bulk) })))));
   setChildren(root, pageShell("materials", "Materials", "Solvent, temperature and the ions in the electrolyte.",
     h("div.grid2", {}, stepParams(app, doc, "materials", "Material parameters", "No material parameters in this template."), panel("Species", spBody)),
-    stub("An ion library (valence and diffusivity at 25 °C), custom ions and lab units arrive with the project file.")));
+    stub("An ion library (valence and diffusivity at 25 °C), custom ions and lab units need the project file, which is not built yet.")));
 }
 
 // ---------------------------------------------------------------------------
+/** What bcWords / bcShort need to show a condition's values as entered or scaled. */
+function bcContext(app, doc) {
+  const rows = app.paramRows(doc);
+  return { params: (doc.summary || {}).params, si: app.S.units === "SI", inputs: Object.fromEntries(rows.map((r) => [r.key, r.value])), scales: scalesFor(rows) };
+}
+
 export function renderBoundaries(app, doc, root) {
   const s = doc.summary || {};
-  const bcs = (s.model && s.model.boundaries) || {};
+  const { bcs, base, changed } = effectiveBCs(doc);
   const names = app.boundaryNames(doc);
   const diag = (doc.diagnose && doc.diagnose.checks) || s.mesh_checks || [];
   const coverage = diag.filter((c) => /BC|boundar/i.test(c.name));
+  const flow = s.model && s.model.flow && s.model.flow !== "none";
+  const expert = app.S.expert;
+  const ctx = bcContext(app, doc);
+  const editable = doc.kind === "case" && !!doc.caseData;
+  const all = [...new Set([...names, ...Object.keys(bcs)])];
+  if (doc.bSel && !all.includes(doc.bSel)) doc.bSel = null;
+  root.dataset.bsel = doc.bSel || "";
+
+  // re-render in place: keep the scroll position and the focused control
+  const refresh = () => {
+    const page = root.querySelector(".page");
+    const top = page ? page.scrollTop : 0;
+    const focus = document.activeElement && root.contains(document.activeElement) ? document.activeElement.id : null;
+    renderBoundaries(app, doc, root);
+    const p2 = root.querySelector(".page");
+    if (p2) p2.scrollTop = top;
+    if (focus) { const el = document.getElementById(focus); if (el) el.focus(); }
+  };
+  const select = (b) => { doc.bSel = doc.bSel === b ? null : b; refresh(); app.syncURL(); };
+  const hover = (b) => highlightBoundary(root, b);
+
   let body;
-  if (!names.length && !Object.keys(bcs).length) {
-    body = placeholder("empty", "Boundaries are named when the mesh is built", "Solve once to see each named boundary and the condition on it.");
+  if (!all.length) {
+    body = placeholder("empty", "Boundaries are named when the mesh is built", editable ? "Create the mesh to see each named boundary and set its condition." : "Solve once to see each named boundary and the condition on it.");
   } else {
-    const all = [...new Set([...names, ...Object.keys(bcs)])];
-    const keys = [...new Set(Object.values(bcs).flatMap((v) => Object.keys(v || {})))];
-    body = h("table.tbl", {}, h("thead", {}, h("tr", {}, h("th", { text: "boundary" }), keys.map((k) => h("th", { text: prettyName(k) })), keys.length ? null : h("th", { text: "condition" }))),
-      h("tbody", {}, all.map((b, i) => h("tr", {},
+    const keys = ["c", "phi", ...(flow ? ["u"] : [])];
+    const cell = (b, k) => {
+      const spec = bcs[b] ? bcs[b][k] : undefined;
+      if (/axis|symmetry/.test(b) && spec === undefined) return h("td.dim", { text: "symmetry" });
+      const raw = typeof spec === "object" && spec !== null && typeof spec.type === "string" ? null : spec;
+      return h("td", { class: spec === undefined ? "dim" : "" }, bcWords(k, spec, ctx),
+        expert && raw !== undefined && raw !== null ? h("div.mono.small.dim", { text: typeof raw === "object" ? JSON.stringify(raw) : String(raw) }) : null);
+    };
+    body = h("table.tbl.bc-table", {}, h("thead", {}, h("tr", {}, h("th", { text: "boundary" }), keys.map((k) => h("th", { text: BC_QTY[k] })))),
+      h("tbody", {}, all.map((b, i) => h("tr", { "data-b": b, tabindex: "0", "aria-label": `${b}: ${editable ? "change its condition" : "show its condition"}`,
+        onpointerenter: () => hover(b), onpointerleave: () => hover(null), onclick: () => select(b),
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(b); } } },
         h("th", {}, h("span", { style: { display: "inline-flex", alignItems: "center", gap: "8px" } },
-          h("span.swatch", { class: /axis|symmetry/.test(b) ? "dashed" : "", style: /axis|symmetry/.test(b) ? { borderColor: boundaryColor(b, i), width: "14px" } : { background: boundaryColor(b, i) } }), h("span.mono", { text: b }))),
-        keys.length ? keys.map((k) => h("td.mono", { text: bcs[b] && bcs[b][k] !== undefined ? String(bcs[b][k]) : "natural (default)" }))
-          : h("td.dim", { text: "natural (default)" })))));
+          h("span.swatch", { class: /axis|symmetry/.test(b) ? "dashed" : "", style: /axis|symmetry/.test(b) ? { borderColor: boundaryColor(b, i), width: "14px" } : { background: boundaryColor(b, i) } }),
+          h("span.mono", { text: b }),
+          changed.has(b) ? h("span.badge.b-neutral", { text: editable ? "changed" : "differs" }) : null)),
+        keys.map((k) => cell(b, k))))));
   }
-  setChildren(root, pageShell("boundary", "Boundaries", "The condition on every named boundary. Boundaries without an entry use the natural condition: blocking for ions, no surface charge, no-slip.",
-    h("div.stack", {}, stepParams(app, doc, "boundaries", "Boundary parameters", "No boundary parameters in this template."),
-      panel("Conditions per boundary", body), coverage.length ? panel("Coverage check", checksList(coverage, { withFix: true })) : null),
-    stub("Choosing conditions per boundary (Dirichlet, flux, Stern, surface charge, inlet/outlet) arrives with the project file.")));
+  const nChanged = changed.size;
+  const changedBadge = nChanged ? h("span.badge.b-neutral", { text: `${nChanged} ${editable ? "changed" : "differ"} from template` }) : null;
+  const sel = doc.bSel;
+  const editor = sel ? boundaryEditor(app, doc, sel, ctx, { base, index: Math.max(0, all.indexOf(sel)), onChange: refresh, onClose: () => select(sel) }) : null;
+  const lead = editable ? "Where each named boundary is and the condition on it. Click a boundary in the drawing or the table to change its condition."
+    : "Where each named boundary is and the condition on it. Grey entries are the defaults: no flux, no charge, no-slip.";
+  setChildren(root, pageShell("boundary", "Boundaries", lead,
+    h("div.stack", { onkeydown: (e) => { if (e.key === "Escape" && doc.bSel) select(doc.bSel); } },
+      names.length ? panel("Where each boundary is", boundaryDiagram(app, doc, names, bcs, ctx, { onHover: hover, onSelect: select, editable })) : null,
+      editor,
+      panel("Conditions per boundary", body, changedBadge),
+      stepParams(app, doc, "boundaries", "Boundary parameters", "No boundary parameters in this template."),
+      coverage.length ? panel("Coverage check", checksList(coverage, { withFix: true })) : null)));
+  highlightBoundary(root, null);
 }
 
-// ---------------------------------------------------------------------------
 export function renderEquations(app, doc, root) {
   const s = doc.summary || {};
   const model = s.model || {};
@@ -223,7 +319,7 @@ export function renderEquations(app, doc, root) {
       "Re (u&middot;&nabla;)u = &minus;&nabla;p + &nabla;<sup>2</sup>u &minus; K &rho; &nabla;&phi;, &nbsp; &nabla;&middot;u = 0", flow ? `flow model: ${flow}${model.advection ? `, ${model.advection} advection` : ""}${model.supg ? ", SUPG" : ""}` : null));
   setChildren(root, pageShell("equations", "Governing equations", "Steady, nondimensional. Jacobians come from JAX automatic differentiation, not hand-written derivatives.",
     h("div.stack", {}, panel("Physics", list), stepParams(app, doc, "equations", "Physics parameters", "No dimensionless groups to set in this template.")),
-    stub("Switching physics on and off (ions, flow type, advection form) arrives with the project file; the template fixes it today.")));
+    stub("Switching physics on and off (ions, flow type, advection form) needs the project file. Today the template fixes it.")));
 }
 
 // ---------------------------------------------------------------------------
@@ -249,16 +345,16 @@ export function renderStudy(app, doc, root) {
   };
   const devSel = h("select.sel#run-device", { "aria-label": "Compute device", title: "Where JAX assembles the residual and Jacobian (the sparse solve runs on the CPU)",
     onchange: (e) => { app.setDevice(e.target.value); updateCmd(); setDot(); } },
+    h("option", { value: "cpu", text: "CPU" }),
     h("option", { value: "auto", text: "Auto (GPU when present)" }),
-    h("option", { value: "gpu", text: "GPU" }),
-    h("option", { value: "cpu", text: "CPU" }));
+    h("option", { value: "gpu", text: "GPU" }));
   devSel.value = app.device();
   app.devices().then((dv) => {
     const gpuOpt = devSel.querySelector('option[value="gpu"]');
     gpuOpt.disabled = !dv.gpu;
-    if (!dv.gpu && devSel.value === "gpu") { devSel.value = "auto"; app.setDevice("auto"); updateCmd(); }
+    if (!dv.gpu && devSel.value === "gpu") { devSel.value = "cpu"; app.setDevice("cpu"); updateCmd(); }
     gpuFound = !!dv.gpu; setDot();
-    devNote.textContent = dv.gpu ? `GPU found: ${(dv.devices || []).join(", ")}` : (dv.error ? `No GPU (${dv.error.slice(0, 120)})` : "No GPU found; runs use the CPU");
+    devNote.textContent = dv.gpu ? `GPU found: ${(dv.devices || []).join(", ")}` : (dv.error ? `No GPU (${dv.error.slice(0, 120)})` : "No GPU found. Runs use the CPU");
   });
   const changedLine = h("div.small");
   const updateCmd = () => {
@@ -309,7 +405,7 @@ function studySettings(app, doc) {
   const rows = rowsOf(app, doc, "study");
   if (!c.transient) {
     return h("section.panel#step-params", {}, h("header.panel-head", {}, h("h2", { text: "Solver settings" })),
-      h("div.panel-body", {}, paramForm(app, doc, rows, { layout: "grid", readonly: doc.kind === "run", empty: "No solver settings in this template." })),
+      h("div.panel-body", {}, paramForm(app, doc, rows, { layout: "grid", expert: app.S.expert, readonly: doc.kind === "run", empty: "No solver settings in this template." })),
       doc.kind === "run" ? resultFoot(app, doc) : null);
   }
   const readonly = doc.kind !== "case";
@@ -353,8 +449,8 @@ function studySettings(app, doc) {
 
   // saved times: mode picker
   const sv = curSave();
-  const modes = [["template", "Template", "The template's own output list (pore: log-spaced set, or the DNS folder times with dns_times = 1)"],
-    ["uniform", "Every Δτ", "Save every Δτ from 0 to τ_end (a save time step you choose)"], ["log", "Log-spaced", "N points evenly spaced in log τ between τ_min and τ_end"], ["list", "List", "Exactly these τ values"]];
+  const modes = [["template", "Template", "The template's own list of saved times. The pore template saves a log-spaced set, or the DNS folder times when dns_times = 1"],
+    ["uniform", "Every Δτ", "Evenly spaced from 0 to τ_end, as N points (default 100) or one save every Δτ"], ["log", "Log-spaced", "N points evenly spaced in log τ between τ_min and τ_end"], ["list", "List", "Exactly these τ values"]];
   const modeSeg = h("span.seg.ts-seg", { role: "radiogroup", "aria-label": "Saved times" }, modes.map(([m, t, tip]) => h("button", {
     type: "button", role: "radio", "aria-checked": String(sv.mode === m), "aria-pressed": String(sv.mode === m), disabled: readonly || null, "data-tip": tip,
     onclick: () => { curSave().mode = m; save(); drawSave(); modeSeg.querySelectorAll("button").forEach((b, i) => { const on = modes[i][0] === m; b.setAttribute("aria-pressed", String(on)); b.setAttribute("aria-checked", String(on)); }); } }, t)));
@@ -365,6 +461,7 @@ function studySettings(app, doc) {
     const te = tauEnd();
     const cs = curSave();
     if (!te) return null;
+    if (cs.mode === "uniform" && cs.by === "count") return cs.n_lin > 0 ? cs.n_lin : null;
     if (cs.mode === "uniform") return cs.dtau > 0 ? Math.floor(te / cs.dtau + 1e-9) + (Math.abs(Math.round(te / cs.dtau) * cs.dtau - te) > 1e-9 * te ? 1 : 0) : null;
     if (cs.mode === "log") return cs.n || null;
     if (cs.mode === "list") return new Set([...(cs.list || []).filter((t) => t > 0 && t <= te), te]).size;
@@ -372,7 +469,7 @@ function studySettings(app, doc) {
   };
   const drawPreview = () => {
     const n = saveTimes();
-    preview.textContent = curSave().mode === "template" ? "the template decides (τ = 0.13 and τ_mid are always saved)" : n ? `${n} saved time${n === 1 ? "" : "s"} plus τ = 0.13 and τ_mid when inside the run; τ_end is always saved` : "";
+    preview.textContent = curSave().mode === "template" ? "the template decides (τ = 0.13 and τ_mid are always saved)" : n ? `${n} saved time${n === 1 ? "" : "s"} plus τ = 0.13 and τ_mid when inside the run. τ_end is always saved` : "";
   };
   const svCell = (label, key, tip, opts = {}) => {
     const inp = h("input.inp", { type: "text", inputmode: "decimal", readonly: readonly || null, value: String(curSave()[key] ?? ""),
@@ -387,7 +484,16 @@ function studySettings(app, doc) {
   function drawSave() {
     const cs = curSave();
     let cells = [];
-    if (cs.mode === "uniform") cells = [svCell("Δτ", "dtau", "Spacing of the saved times: the time step between saves, set by you")];
+    if (cs.mode === "uniform") {
+      const bys = [["count", "Linear spacing", "N points evenly spaced in τ: τ_end/N, 2 τ_end/N, …, τ_end. Play in Results steps through these times"],
+        ["dtau", "Fixed Δτ", "Save once every Δτ, a step you set"]];
+      const bySeg = h("span.seg.ts-seg", { role: "radiogroup", "aria-label": "Spacing" }, bys.map(([b, t, tip]) => h("button", {
+        type: "button", role: "radio", "aria-checked": String(cs.by === b), "aria-pressed": String(cs.by === b), disabled: readonly || null, "data-tip": tip,
+        onclick: () => { curSave().by = b; save(); drawSave(); } }, t)));
+      cells = [h("div.ts-cell.auto", {}, h("span.ts-lbl", { text: "Spacing" }), bySeg), cs.by === "count"
+        ? svCell("N points", "n_lin", "Number of linearly spaced saved times (default 100). Each one is a frame when you play the field", { integer: true })
+        : svCell("Δτ", "dtau", "Time between two saved times")];
+    }
     else if (cs.mode === "log") cells = [svCell("N points", "n", "Number of saved times", { integer: true }), svCell("from τ_min", "tau_min", "First saved time")];
     else if (cs.mode === "list") {
       const inp = h("input.inp.ts-list", { type: "text", readonly: readonly || null, value: (cs.list || []).join(", "), placeholder: "0.01, 0.13, 0.5, 1",
@@ -412,14 +518,14 @@ function studySettings(app, doc) {
       h("div.ts-row", {},
         paramCell("End time", "tau_end", "Final time τ_end"),
         paramCell("First step", "dt0", "First time step (in a_ref² / D)"),
-        timeCell("Max step Δτ", "dt_max", "Largest step in τ units (blank = template default, 0.02)", { blank: "auto" }),
-        paramCell("Step tolerance", "rtol", "Max change against the linear extrapolation per step; smaller = more, smaller steps"),
+        timeCell("Max step Δτ", "dt_max", "Largest step in τ units (blank uses the template default, 0.02)", { blank: "auto" }),
+        paramCell("Step tolerance", "rtol", "Largest change per step against the linear extrapolation. A smaller value gives more, smaller steps"),
         timeCell("Max rejects", "max_rejects", "Rejected steps in a row before the run gives up", { integer: true })),
       h("div.ts-sub", {}, h("span.ts-head", { text: "Saved times" }), modeSeg, preview),
       saveBody,
       others.length ? [h("div.ts-sub", {}, h("span.ts-head", { text: "Other study settings" })),
-        paramForm(app, doc, others, { layout: "grid", readonly })] : null),
-    readonly ? resultFoot(app, doc) : h("div.panel-foot", { text: `Saved in cases/${doc.caseName}/case.json; applies to the next solve.` }));
+        paramForm(app, doc, others, { layout: "grid", expert: app.S.expert, readonly })] : null),
+    readonly ? resultFoot(app, doc) : h("div.panel-foot", { text: `Saved in cases/${doc.caseName}/case.json. The next solve uses it.` }));
 }
 
 /** Refresh the dynamic parts of the Study page (called on every poll). */

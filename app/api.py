@@ -14,7 +14,7 @@ GET  /api/run/<name>/<file>         summary.json | fields.json | profiles.json |
 GET  /api/run/<name>/log?tail=N     last N bytes of stdout.log (default 64 KiB)
 GET  /api/cases                     output of `python run.py --list` ({} if unavailable)
 POST /api/launch                    {case, name, params:{k:v}, overwrite?, device?} -> spawn run.py
-                                    device: "auto" (default) | "cpu" | "gpu" (sets JAX_PLATFORMS)
+                                    device: "cpu" (default) | "auto" | "gpu" (sets JAX_PLATFORMS)
 GET  /api/devices                   {"gpu": bool, "devices": [...], "error"?} (probed once, cached)
 POST /api/stop                      {name} -> terminate a run launched by this server
 """
@@ -143,6 +143,27 @@ def proc_status(name):
             "started": entry["started"]}
 
 
+def solver_pid_status(progress):
+    """Liveness of the solver that writes progress.json (its "pid"), for runs this
+    server did not launch (shell, nohup, an earlier server). None if unknown."""
+    pid = (progress or {}).get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    alive = False
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:     # Linux: also guards against pid reuse
+            alive = b"run.py" in f.read()
+    except FileNotFoundError:
+        alive = False
+    except OSError:                                        # no /proc (macOS, Windows)
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except OSError:
+            alive = False
+    return {"pid": pid, "alive": alive, "returncode": None, "external": True}
+
+
 def run_state(progress, proc, has_summary):
     """Combine progress.json and our own process bookkeeping into one state."""
     state = (progress or {}).get("state")
@@ -165,6 +186,12 @@ def latest_mtime(path):
     return best
 
 
+
+# Checks that do not decide whether a run can be trusted (same list as app/ui/js/pages.js CHECK_WORDS).
+def _optional_check(c):
+    name = str(c.get("name", ""))
+    return bool(c.get("optional")) or name == "steady equilibrium solve" or name.startswith("post-processing: ")
+
 def run_entry(name, path):
     """Compact description of one run for the sidebar."""
     summary = read_json(os.path.join(path, "summary.json"))
@@ -180,7 +207,9 @@ def run_entry(name, path):
     worst = None
     order = {"fail": 3, "warn": 2, "pass": 1, "info": 0}
     for c in checks if isinstance(checks, list) else []:
-        s = c.get("status") if isinstance(c, dict) else None
+        if not isinstance(c, dict) or _optional_check(c):
+            continue
+        s = c.get("status")
         if s in order and (worst is None or order[s] > order[worst]):
             worst = s
     entry = {
@@ -199,7 +228,7 @@ def run_entry(name, path):
         "progress": {k: progress.get(k) for k in
                      ("state", "stage", "n_stages", "iteration", "res_norm", "message", "time_s")
                      if k in progress},
-        "proc": proc,
+        "proc": proc or (solver_pid_status(progress) if progress.get("state") not in FINAL_STATES else None),
     }
     return entry
 
@@ -287,7 +316,7 @@ def launch(body):
         return 400, {"error": "invalid run name (letters, digits, _ . - only)"}
     if not isinstance(params, dict):
         return 400, {"error": "params must be an object"}
-    device = str(body.get("device") or "auto")
+    device = str(body.get("device") or "cpu")
     if device not in ("auto", "cpu", "gpu"):
         return 400, {"error": "device must be auto, cpu or gpu"}
     run_py = os.path.join(ROOT, "run.py")

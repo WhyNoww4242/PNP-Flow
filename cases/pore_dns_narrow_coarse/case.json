@@ -1,49 +1,52 @@
 {
- "format": 1,
- "name": "pore_dns_narrow_coarse",
- "template": "pore_charging",
- "description": "DNS comparison, narrow pore (alpha 1 -> 1), L = 10 \u00b5m, coarse mesh",
- "created": "2026-11-23T11:55:02",
- "modified": "2026-11-23T12:31:26",
  "params": {
-  "L_nm": 10000.0,
-  "a_ref_nm": 10.0,
-  "phi_w_mV": 10.0,
+  "L_nm": 10000,
+  "a_ref_nm": 10,
+  "phi_w_mV": 10,
   "c0_mM": 0.948,
   "eps": 7.0832e-10,
   "T": 298.15,
   "D": 1.337e-09,
-  "phi_end_mV": 10.0,
-  "sdl_radius": 0.0,
-  "sdl_length": 0.0,
+  "phi_end_mV": 10,
+  "sdl_radius": 0,
+  "sdl_length": 0,
   "tau_end": 0.535,
-  "dns_times": 1.0,
-  "dns_init": 1.0,
-  "alpha_in": 1.0,
-  "alpha_out": 1.0,
+  "dns_times": 1,
+  "dns_init": 1,
+  "alpha_in": 1,
+  "alpha_out": 1,
   "h_wall": 0.15,
-  "equilibrium_check": 0.0
+  "equilibrium_check": 0
  },
  "units": {},
  "figures": {
   "standard": true
  },
+ "next_run_name": null,
+ "format": 1,
+ "name": "pore_dns_narrow_coarse",
+ "template": "pore_charging",
+ "description": "DNS comparison, narrow pore (alpha 1 -> 1), L = 10 \u00b5m, coarse mesh",
+ "created": "2026-11-23T11:55:02",
+ "modified": "2026-11-24T23:41:49",
  "mesh": {
   "density": 0.95,
   "boundaries": [],
   "regions": [],
   "corners": {
    "enabled": false,
-   "size": 0.0,
-   "radius": 0.0,
-   "max_angle": 80.0
+   "size": 0,
+   "radius": 0,
+   "max_angle": 80
   },
   "paint": [],
   "paint_growth": 1.2
  },
  "time": {
   "save": {
-   "mode": "template",
+   "mode": "uniform",
+   "by": "count",
+   "n_lin": 100,
    "dtau": 0.05,
    "n": 20,
    "tau_min": 0.0001,

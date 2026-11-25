@@ -28,8 +28,12 @@ const STALE_S = 600;
 /** True when progress.json claims a running state but nothing is alive behind it. */
 export function isStale(entry) {
   if (!entry || !RUNNING.has(entry.state)) return false;
-  if (entry.proc && entry.proc.alive) return false;
-  return typeof entry.mtime === "number" && Date.now() / 1000 - entry.mtime > STALE_S;
+  if (entry.proc) return !entry.proc.alive;
+  // no process info (older runs): judge by the last write; a time in the future means the
+  // clocks disagree, so the run's liveness is unknown rather than live
+  if (typeof entry.mtime !== "number") return false;
+  const age = Date.now() / 1000 - entry.mtime;
+  return age > STALE_S || age < -120;
 }
 
 /** History of the current (last) stage. */
@@ -104,9 +108,9 @@ export function tellsText(st) {
   if (isNum(t.alpha)) lines.push(`line-search step α = ${fmt(t.alpha, 3)}`);
   if (isNum(t.min_c)) lines.push(`min concentration = ${fmt(t.min_c, 3)}`);
   if (isNum(t.halvings)) lines.push(`continuation halvings = ${fmt(t.halvings)}`);
-  if (st.state === "stale") lines.push("progress.json says the run is in progress, but it has not changed for a long time and no process launched by this app is behind it. The run was probably interrupted.");
+  if (st.state === "stale") lines.push(`progress.json says the run is in progress, but no solver process is running it (or its files are older than ${STALE_S / 60} min, or dated in the future so their age is unknown). The run was probably interrupted.`);
   if (!lines.length) lines.push("no iteration data yet");
-  if (st.healthDerived) lines.push("(derived from the iteration history; the solver does not report health yet)");
+  if (st.healthDerived) lines.push("Health is derived from the iteration history because the solver does not report it yet.");
   return lines.join("\n");
 }
 
@@ -184,12 +188,22 @@ export function convergenceSeries(summary, progress) {
 }
 
 /** Overall bar of a time-dependent run: simulated time over t_end, with step count. */
+/** Seconds with an SI prefix, as output.fmt_seconds: 1.868e-6 -> "1.868 µs". */
+export function fmtSeconds(sec) {
+  const a = Math.abs(sec);
+  if (!a) return "0 s";
+  for (const [f, u] of [[1, "s"], [1e-3, "ms"], [1e-6, "µs"], [1e-9, "ns"], [1e-12, "ps"]]) {
+    if (a >= f || u === "ps") return `${Number.parseFloat((sec / f).toPrecision(4))} ${u}`;
+  }
+}
+
 export function timeBar(st) {
   const t = st.time;
   const frac = st.state === "done" ? 1 : t.t_end > 0 ? Math.min(1, Math.max(0, t.t / t.t_end)) : 0;
   const pct = Math.round(frac * 100);
   const tau = isNum(t.tau) ? `\u03c4 = ${fmt(t.tau, 3)} of ${fmt(t.tau_end, 3)}` : `t = ${fmt(t.t, 3)} of ${fmt(t.t_end, 3)}`;
-  const text = `${tau}, step ${t.step ?? "–"}${t.rejects ? `, ${t.rejects} rejected` : ""}`;
+  const real = isNum(t.t_s) && isNum(t.t_end_s) ? `, t = ${fmtSeconds(t.t_s)} of ${fmtSeconds(t.t_end_s)}` : "";
+  const text = `${tau}${real}, step ${t.step ?? "–"}${t.rejects ? `, ${t.rejects} rejected` : ""}`;
   return h("div.time-progress", {},
     h("div.time-head", {}, h("span", { text: "Overall progress" }), h("span.spacer"), h("b.mono", { text: `${pct} %` })),
     h("span.stages.wide", { role: "progressbar", "aria-label": `${text}, ${pct} % done`, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) },

@@ -173,6 +173,22 @@ export function prettyName(name) {
     .replace(/^vorticity$/, "ω").replace(/^theta_deg$/, "θ (deg)");
 }
 
+/**
+ * Solver ASCII maths as symbols, for notes and labels: "lambda_D = delta/a_p", "Phi_w",
+ * "l_p^2", "tau", "mu_Z05" -> λ_D, δ, Φ_w, l_p², τ, μ. Identifiers in code or paths are left alone
+ * only by luck, so use this on prose, not on keys the user types.
+ */
+const GREEK = { lambda: "λ", Lambda: "Λ", delta: "δ", Delta: "Δ", kappa: "κ", tau: "τ", mu: "μ", rho: "ρ", alpha: "α", beta: "β", gamma: "γ",
+  sigma: "σ", Sigma: "Σ", eps: "ε", epsilon: "ε", phi: "φ", Phi: "Φ", Psi: "Ψ", psi: "ψ", omega: "ω", theta: "θ", eta: "η", nu: "ν", zeta: "ζ", xi: "ξ" };
+const SUP = { "2": "²", "3": "³", "-1": "⁻¹", "-2": "⁻²", "-3": "⁻³" };
+export function prettyMath(text) {
+  return String(text)
+    .replace(/\b(lambda|Lambda|delta|Delta|kappa|tau|mu|rho|alpha|beta|gamma|sigma|Sigma|epsilon|eps|phi|Phi|Psi|psi|omega|theta|eta|nu|zeta|xi)(?=_|\b|\d)/g, (m) => GREEK[m])
+    .replace(/\^(-?\d)(?!\d)/g, (m, e) => SUP[e] || m)
+    .replace(/\bsqrt\(/g, "√(")
+    .replace(/ \+- /g, " ± ").replace(/<=/g, "≤").replace(/>=/g, "≥");
+}
+
 /** Field names that are signed by nature (used together with the data range). */
 export function isSignedFieldName(name) {
   return /^(phi|rho|vorticity|omega|uy|uz|ux|ur|Ey|Ez|Ex|Er|p|sigma|shear|N_.*_[xyzr])$/.test(name);

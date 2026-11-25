@@ -8,11 +8,12 @@ import { icon } from "./icons.js";
 import { initColormaps, colormapNames, colormapType, colormapSource } from "./colormaps.js";
 import { prepareMesh, prepareTimeFields } from "./glfield.js";
 import { FieldView, boundaryColor } from "./fieldview.js";
+import { effectiveBCs } from "./bdiagram.js";
 import { resizeAll } from "./plots.js";
 import { runStatus, healthBadge, stageBars, RUNNING, STATE_WORD, isStale } from "./progress.js";
 import { renderStart, caseTitle, runStatusWord } from "./start.js";
 import { paramForm, rowsOf, STEP_LABEL } from "./params.js";
-import { renderGeometry, renderMesh, renderMaterials, renderBoundaries, renderEquations, renderStudy, updateStudy } from "./pages.js";
+import { renderGeometry, renderMesh, renderMaterials, renderBoundaries, renderEquations, renderStudy, updateStudy, checkWords } from "./pages.js";
 import { renderResults, RESULT_VIEWS } from "./results.js";
 
 const POLL_MS = 1500;
@@ -25,7 +26,7 @@ const WB = [
   { id: "study", label: "Study", icon: "study", key: "6" },
   { id: "results", label: "Results", icon: "results", key: "7" },
 ];
-const LATER = "Arrives with the project file (build plan, Phase 1 and 5)";
+const LATER = "Not built yet. It needs the project file (build plan, phases 1 and 5)";
 
 // ---------------------------------------------------------------------------
 // State
@@ -86,12 +87,6 @@ app.symmetryOf = (doc) => {
   return null;
 };
 
-app.bcSummary = (doc, b) => {
-  const bc = doc.summary && doc.summary.model && doc.summary.model.boundaries && doc.summary.model.boundaries[b];
-  if (!bc) return /axis|symmetry/.test(b) ? "symmetry axis (natural condition)" : "natural condition (default)";
-  return Object.entries(bc).map(([k, v]) => `${prettyName(k)}: ${v}`).join(", ");
-};
-
 app.entryOf = (name) => S.runs.find((r) => r.name === name) || null;
 app.statusOf = (doc) => (doc && doc.name ? runStatus(doc.progress, app.entryOf(doc.name)) : null);
 app.canStop = (doc) => { const e = doc && app.entryOf(doc.name); return !!(e && e.proc && e.proc.alive); };
@@ -126,8 +121,8 @@ app.commandLine = (doc, name) => {
   return `${env}python run.py ${doc.case} --name ${name || "<name>"}${sets}`;
 };
 
-// Compute device for new runs: "auto" | "cpu" | "gpu" (remembered per browser)
-app.device = () => { try { return localStorage.getItem("pnpflow.device") || "auto"; } catch { return "auto"; } };
+// Compute device for new runs: "cpu" (default) | "auto" | "gpu" (remembered per browser)
+app.device = () => { try { return localStorage.getItem("pnpflow.device") || "cpu"; } catch { return "cpu"; } };
 app.setDevice = (v) => { try { localStorage.setItem("pnpflow.device", v); } catch { /* storage blocked */ } };
 let devicesPromise = null;
 app.devices = () => (devicesPromise ||= bridge.devices().catch((e) => ({ gpu: false, devices: [], error: e.message })));
@@ -255,7 +250,7 @@ function themeChanged() {
 // ---------------------------------------------------------------------------
 // Commands (menus, toolbar, keyboard and tooltips all read from here)
 // ---------------------------------------------------------------------------
-const caseOnly = () => { const d = app.activeDoc(); return d.kind === "case" ? true : d.kind === "run" ? "Mesh tools edit a case; open the run's case" : "Open a case first"; };
+const caseOnly = () => { const d = app.activeDoc(); return d.kind === "case" ? true : d.kind === "run" ? "Mesh tools edit a case. Open the run's project" : "Open a project first"; };
 function meshTool(tool, label, ic) {
   return { label, icon: ic, enabled: caseOnly,
     pressed: () => { const d = app.activeDoc(); return d.kind === "case" && d.wb === "mesh" && (d.meshTool || "pan") === tool; },
@@ -267,7 +262,7 @@ function focusMeshPanel(id, click = false) {
   requestAnimationFrame(() => { const el = document.getElementById(id); if (el) { el.scrollIntoView({ block: "center" }); if (click) el.click(); else el.focus(); } });
 }
 const fieldActive = () => { const d = app.activeDoc(); return d.kind !== "start" && d.wb === "results" && d.rview === "field" && app.field.mesh && app.field.docId === d.id; };
-const needField = () => (fieldActive() ? true : "Open Results, Field map first");
+const needField = () => (fieldActive() ? true : "Open the Field map in Results first");
 const docOpen = () => (app.activeDoc().kind !== "start" ? true : "Open a template or a run first");
 
 const CMD = {
@@ -284,8 +279,8 @@ const CMD = {
   resetParams: { label: "Reset parameters to the template values", icon: "reset",
     enabled: () => {
       const d = app.activeDoc();
-      if (d.kind === "start") return "Open a case first";
-      if (d.kind === "run") return "A result's inputs are fixed; open its case";
+      if (d.kind === "start") return "Open a project first";
+      if (d.kind === "run") return "A result's inputs are read-only. Open its project";
       return app.paramRows(d).some((r) => r.changed) ? true : "Every parameter is at its template value";
     },
     run: () => {
@@ -304,20 +299,23 @@ const CMD = {
   bnd: { label: "Boundaries", icon: "boundary", key: "B", enabled: needField, pressed: () => !!app.field.opts.bnd, run: () => app.field.toggleOpt("bnd") },
   contours: { label: "Contour lines", icon: "contours", key: "C", enabled: needField, pressed: () => !!app.field.opts.contours, run: () => app.field.toggleOpt("contours") },
   stream: { label: "Streamlines of u", icon: "flow", key: "S",
-    enabled: () => (fieldActive() ? (app.field.mesh.vectors.u ? true : "This run has no velocity field") : "Open Results, Field map first"),
+    enabled: () => (fieldActive() ? (app.field.mesh.vectors.u ? true : "This run has no velocity field") : "Open the Field map in Results first"),
     pressed: () => !!app.field.opts.stream, run: () => app.field.toggleOpt("stream") },
   mirror: { label: "Mirror about the axis (axisymmetric)", icon: "mirror", key: "M",
-    enabled: () => (fieldActive() ? (app.field.mesh.axisym ? true : "Only for axisymmetric runs") : "Open Results, Field map first"),
+    enabled: () => (fieldActive() ? (app.field.mesh.axisym ? true : "Only for axisymmetric runs") : "Open the Field map in Results first"),
     pressed: () => !!app.field.opts.mirror, run: () => setMirror(!app.field.opts.mirror) },
   combo: { label: "Show the model panel", icon: "list", key: "[", pressed: () => !$("#workspace").classList.contains("combo-hidden"),
     run: () => { $("#workspace").classList.toggle("combo-hidden"); setTimeout(() => { app.field.resize(); resizeAll(document); }, 30); } },
   solve: { label: "Solve", icon: "play", key: "F8", primary: true,
     enabled: () => { const d = app.activeDoc(); if (d.kind === "start") return "Open a template or a run first"; if (!S.casesLoaded) return "Loading the templates from run.py"; if (!S.cases[d.case]) return `Template '${d.case}' is not available from run.py`; const st = app.statusOf(d); return st && st.running ? "This run is already in progress" : true; },
     run: () => { const d = app.activeDoc(); if (d.wb !== "study") setWorkbench("study"); app.solve(d, {}); } },
+  rerunInProject: { label: "Open this result's project on the Study page to run it again", icon: "play",
+    enabled: () => { const d = app.activeDoc(); return d.listing && d.listing.project ? true : "This result has no project"; },
+    run: () => { const d = app.activeDoc(); app.openCase(d.listing.project, { wb: "study" }); } },
   stop: { label: "Stop the run", icon: "stop", key: "Shift+F8",
     enabled: () => { const d = app.activeDoc(); const st = app.statusOf(d); return st && st.running ? (app.canStop(d) ? true : "Only runs started from this app can be stopped") : "No run in progress"; },
     run: () => app.stop(app.activeDoc()) },
-  units: { label: "Units: SI / dimensionless", icon: "units", key: "U", run: () => setUnits(S.units === "SI" ? "dimensionless" : "SI") },
+  units: { label: "Switch units, SI or dimensionless", icon: "units", key: "U", run: () => setUnits(S.units === "SI" ? "dimensionless" : "SI") },
   expert: { label: "Expert mode", icon: "sliders", key: "X", pressed: () => S.expert, run: () => setExpert(!S.expert) },
   help: { label: "Keyboard shortcuts", icon: "keyboard", key: "?", run: () => openHelp() },
   about: { label: "About pnpflow", icon: "info", run: () => openAbout() },
@@ -334,14 +332,14 @@ const CMD = {
   addIon: { label: "Add an ion from the library", icon: "ion", enabled: () => LATER, run: () => {} },
   editBC: { label: "Set a boundary condition", icon: "electrode", enabled: () => LATER, run: () => {} },
   editPhysics: { label: "Choose physics (ions, flow)", icon: "equations", enabled: () => LATER, run: () => {} },
-  diagnose: { label: "Mesh Validation", icon: "diagnose", enabled: docOpen, run: () => {
+  diagnose: { label: "Mesh validation", icon: "diagnose", enabled: docOpen, run: () => {
     const d = app.activeDoc();
     if (d.wb !== "mesh") setWorkbench("mesh");
     requestAnimationFrame(() => { const b = $("#mesh-validation-bar"); if (b) { b.scrollIntoView({ block: "nearest" }); b.focus(); } });
   } },
   buildMesh: { label: "Create mesh (CPU, no solve)", icon: "mesh", enabled: () => {
     const d = app.activeDoc();
-    if (d.kind !== "case") return d.kind === "run" ? "Results keep their mesh; open the case to remesh" : "Open a case first";
+    if (d.kind !== "case") return d.kind === "run" ? "Results keep their mesh. Open the project to remesh" : "Open a project first";
     return d.caseDetail && d.caseDetail.mesh_status && d.caseDetail.mesh_status.state === "building" ? "The mesh is being created" : true;
   }, run: () => app.buildMesh(app.activeDoc()) },
   mtPan: meshTool("pan", "Pan and zoom the mesh", "hand"),
@@ -481,21 +479,21 @@ function stepStatus(doc, wb) {
         const ms = (doc.caseDetail && doc.caseDetail.mesh_status) || {};
         if (ms.state === "building") return { s: "running", why: "Building the mesh" };
         if (ms.state === "failed") return { s: "error", why: `Mesh build failed: ${ms.error || ""}` };
-        if (ms.state !== "done") return { s: "todo", why: "Not created yet: Create mesh, or Solve creates it" };
-        if (!ms.up_to_date) return { s: "warn", why: "Out of date: settings changed since it was built; it is rebuilt when you solve" };
+        if (ms.state !== "done") return { s: "todo", why: "Not created yet. Press Create mesh, or Solve creates it" };
+        if (!ms.up_to_date) return { s: "warn", why: "Out of date. Settings changed since it was built, and Solve rebuilds it" };
         return { s: "done", why: `${fmt((ms.stats || {}).n_elements)} elements, up to date` };
       }
       if (draft || !s) return { s: "none", why: "Built by gmsh when you solve" };
-      if (worst(diag) === "fail") return { s: "error", why: "Mesh diagnose has failures" };
-      if (worst(diag) === "warn") return { s: "warn", why: "Mesh diagnose has warnings" };
+      if (worst(diag) === "fail") return { s: "error", why: "Mesh validation found failures" };
+      if (worst(diag) === "warn") return { s: "warn", why: "Mesh validation found warnings" };
       return { s: "done", why: s.mesh ? `${fmt(s.mesh.n_elements)} elements, min quality ${fmt(s.mesh.quality_min, 2)}` : "Mesh built" };
     case "materials": return { s: "done", why: "Set by the template" };
-    case "boundaries": return { s: "done", why: "Set by the template; unlisted boundaries use the natural condition" };
+    case "boundaries": return { s: "done", why: "Set by the template. Boundaries without a condition use the natural condition" };
     case "equations": return { s: "done", why: "Set by the template" };
     case "study": {
       if (doc.invalid && Object.keys(doc.invalid).length) return { s: "error", why: "Some parameters are invalid" };
       if (!st) return { s: "todo", why: "Ready to solve" };
-      if (st.state === "stale") return { s: "warn", why: "The run stopped updating; it was probably interrupted" };
+      if (st.state === "stale") return { s: "warn", why: "The run stopped updating. It was probably interrupted" };
       if (st.running) return { s: "running", why: `Running: ${STATE_WORD[st.state] || st.state}` };
       if (st.state === "failed") return { s: "error", why: "The run failed" };
       if (s && s.solver && s.solver.converged === false) return { s: "warn", why: "The solver did not converge" };
@@ -504,10 +502,10 @@ function stepStatus(doc, wb) {
     case "results": {
       if (!st || st.running || st.state === "stale") return { s: "none", why: st && st.running ? "Waiting for the run to finish" : "No results yet" };
       if (st.state === "failed") return { s: "error", why: "No results: the run failed" };
-      const w = worst((s && s.checks) || []);
+      const w = worst(((s && s.checks) || []).filter((c) => !checkWords(c).optional));
       if (w === "fail") return { s: "error", why: "At least one check failed" };
       if (w === "warn") return { s: "warn", why: "At least one check has a warning" };
-      return { s: "done", why: s ? "Results and checks available" : "Results available" };
+      return { s: "done", why: s ? "Results available; the required checks pass" : "Results available" };
     }
     default: return { s: "none", why: "" };
   }
@@ -530,6 +528,9 @@ function renderWbTabs() {
   }));
 }
 
+// Text next to the result-view icons (they switch the main view, like tabs)
+const RV_SHORT = { "rv-field": "Field", "rv-profiles": "Profiles", "rv-checks": "Checks", "rv-mesh": "Mesh", "rv-figures": "Figures", "rv-log": "Log" };
+
 const TOOLBARS = {
   start: ["new", "open", "refresh", "|", "themeToggle", "help"],
   geometry: ["editData", "importGeo", "gmshScript", "|", "buildMesh", "wb-boundaries", "diagnose"],
@@ -551,23 +552,24 @@ function renderToolbar() {
     const pressed = c.pressed ? c.pressed() : null;
     const isTheme = id === "themeToggle";
     return h("button.tool", {
-      type: "button", class: c.primary ? "primary" : "", "aria-label": c.label,
+      type: "button", class: c.primary ? "primary" : RV_SHORT[id] ? "labelled" : "", "aria-label": c.label,
       "aria-pressed": pressed === null ? null : String(!!pressed), "aria-disabled": e.ok ? null : "true",
       "data-tip-title": c.label, "data-tip-key": c.key || null, "data-tip-why": e.ok ? null : e.why,
       onclick: () => runCmd(id),
-    }, icon(isTheme ? (resolvedTheme() === "dark" ? "sun" : "moon") : c.icon, 18), c.primary ? c.label : null);
+    }, icon(isTheme ? (resolvedTheme() === "dark" ? "sun" : "moon") : c.icon, 18), c.primary ? c.label : RV_SHORT[id] || null);
   });
   // Solve is the primary action of every document; keep it at the right end of the row.
-  const right = [];
+  // A result's inputs are fixed, so there it reads "Re-run": in its project when it has one.
+  const right = [h("span", { style: { flex: "1" } })];
   if (d.kind !== "start" && !ids.includes("solve")) {
-    right.push(h("span", { style: { flex: "1" } }));
-    const c = CMD.solve;
+    const project = d.kind === "run" && d.listing && d.listing.project;
+    const c = project ? CMD.rerunInProject : CMD.solve;
     const e = enabledOf(c);
+    const text = project ? "Re-run in project" : d.kind === "run" ? "Re-run" : "Solve";
     right.push(h("button.tool.primary", { type: "button", "aria-label": c.label, "aria-disabled": e.ok ? null : "true",
-      "data-tip-title": c.label, "data-tip-key": c.key, "data-tip-why": e.ok ? null : e.why, onclick: () => runCmd("solve") }, icon("play", 14), "Solve"));
-  } else right.push(h("span", { style: { flex: "1" } }));
-  const label = d.kind === "start" ? "Start" : `${WB.find((w) => w.id === d.wb).label} tools`;
-  setChildren($("#toolbar"), tools, right, h("span.tool-label", { text: label }));
+      "data-tip-title": c.label, "data-tip-key": c.key, "data-tip-why": e.ok ? null : e.why, onclick: () => runCmd(project ? "rerunInProject" : "solve") }, icon("play", 14), text));
+  }
+  setChildren($("#toolbar"), tools, right);
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +590,8 @@ function treeData(d) {
   const species = s.model && Array.isArray(s.model.species) ? s.model.species : null;
   kids.materials = species === null ? [] : species.length ? species.map((sp, i) => ({ id: `sp-${i}`, label: prettyName(sp.name), icon: "ion", meta: `z ${sp.z > 0 ? "+" : ""}${sp.z}`, wb: "materials" }))
     : [{ id: "sp-none", label: "No mobile ions", icon: "ion", wb: "materials", muted: true }];
-  kids.boundaries = app.boundaryNames(d).map((b, i) => ({ id: `b-${b}`, label: b, swatch: boundaryColor(b, i), dashed: /axis|symmetry/.test(b), wb: "boundaries", meta: s.model && s.model.boundaries && s.model.boundaries[b] ? Object.keys(s.model.boundaries[b]).map(prettyName).join(", ") : "natural" }));
+  const ebcs = effectiveBCs(d).bcs;
+  kids.boundaries = app.boundaryNames(d).map((b, i) => ({ id: `b-${b}`, label: b, swatch: boundaryColor(b, i), dashed: /axis|symmetry/.test(b), wb: "boundaries", meta: ebcs[b] ? Object.keys(ebcs[b]).map(prettyName).join(", ") : "natural" }));
   const flow = s.model ? s.model.flow : null;
   kids.equations = s.model ? [{ id: "e-p", label: "Poisson", icon: "equations", wb: "equations" },
     species && species.length ? { id: "e-np", label: "Nernst–Planck", icon: "equations", wb: "equations" } : null,
@@ -627,7 +630,7 @@ function renderTree() {
     nodes.push(treeNode(d, n, 0, hasKids, open, sel));
     if (open) for (const k of n.children) nodes.push(treeNode(d, k, 1, false, false, sel));
   }
-  const note = d.kind === "start" ? h("div.tree-note", { text: "These are the construction steps. Open a template or a run from the Start page to fill them in." }) : null;
+  const note = d.kind === "start" ? h("div.tree-note", { text: "These are the construction steps. Open a template or a run from Home to fill them in." }) : null;
   setChildren(root, nodes, note);
   const items = $$(".tn", root);
   const cur = items.find((x) => x.getAttribute("aria-selected") === "true") || items[0];
@@ -704,40 +707,39 @@ function prow(name, control, { changed = false, info = "", plain = true, err = "
 function renderProps() {
   for (const b of $$(".ptab")) b.setAttribute("aria-selected", String(b.dataset.tab === S.ptab));
   const d = app.activeDoc();
-  // Construction steps edit their own parameters on the page, so the panel under the
-  // tree is hidden there and the tree gets the full height.
-  const off = d.kind !== "start" && d.wb !== "results";
+  // Construction steps edit their own parameters on the page, and Home has nothing to
+  // show there, so the panel under the tree only appears on Results.
+  const off = d.kind === "start" || d.wb !== "results";
   $("#combo").classList.toggle("props-off", off);
   const body = $("#props-body");
   if (off) { setChildren(body, null); return; }   // no hidden second copy of the editors
   $("#props-title").textContent = S.ptab === "data" ? "Parameters" : "Display";
-  $("#props-sub").textContent = d.kind === "start" ? "" : caseTitle(d.case);
-  if (d.kind === "start") {
-    setChildren(body, h("div.pempty", { text: S.ptab === "data" ? "Open a template or a run to see and edit its parameters here." : "Display settings for the field map appear here when a run's results are open." }));
-    return;
-  }
+  $("#props-sub").textContent = caseTitle(d.case);
+
   if (S.ptab === "data") renderDataTab(d, body);
   else renderViewTab(d, body);
 }
 
+// Each parameter is shown and edited on the page of the step that owns it (Geometry,
+// Materials, ...); this tab only points to those pages, so no value appears twice.
 function renderDataTab(d, body) {
   const rows = app.paramRows(d);
   if (!S.casesLoaded && !rows.length) { setChildren(body, h("div.pempty", {}, h("div.spinner"), " Loading the template parameters…")); return; }
-  const nChanged = rows.filter((r) => r.changed).length;
-  // grouped by the step that owns each parameter; each step page edits the same values
   const groups = Object.keys(STEP_LABEL).map((step) => [step, rowsOf(app, d, step)]).filter(([, r]) => r.length);
   const derived = d.summary && d.summary.params ? Object.entries(d.summary.params) : [];
+  const differ = d.kind === "run" ? "differ" : "changed";
   setChildren(body,
-    h("div.pgroup", {}, h("span", { text: d.name ? `Inputs of ${d.name}` : "Template parameters" }),
-      nChanged ? h("span.badge.b-warn", { style: { height: "18px" } }, `${nChanged} changed`) : null,
-      h("button.btn-link", { type: "button", disabled: !Object.keys(d.edits).length || null, onclick: () => runCmd("resetParams") }, "Reset all")),
-    rows.length ? groups.map(([step, r]) => [
-      h("div.pgroup.psub", {}, h("button.btn-link", { type: "button", "data-tip": `Open the ${STEP_LABEL[step]} page`, onclick: () => setWorkbench(step) }, STEP_LABEL[step])),
-      paramForm(app, d, r, { layout: "panel", expert: S.expert, readonly: d.kind === "run" })])
+    h("div.pgroup", {}, h("span", { text: d.name ? `Inputs of ${d.name}` : "Template parameters" })),
+    rows.length ? h("div.step-links", {}, groups.map(([step, r]) => {
+      const n = r.filter((x) => x.changed).length;
+      return h("button.step-link", { type: "button", onclick: () => setWorkbench(step), "data-tip": `Show and ${d.kind === "run" ? "read" : "edit"} these on the ${STEP_LABEL[step]} page` },
+        h("span.sl-name", { text: STEP_LABEL[step] }),
+        h("span.sl-meta", { text: `${r.length} parameter${r.length > 1 ? "s" : ""}${n ? `, ${n} ${differ} from template` : ""}` }),
+        icon("chevron-right", 14));
+    }))
       : h("div.pempty", { text: S.casesError ? `Template parameters unavailable: ${S.casesError}` : "This template has no parameters." }),
     S.expert && derived.length ? [h("div.pgroup", { text: "Model parameters (dimensionless, from the run)" }),
-      derived.map(([k, v]) => prow(k, h("input.inp", { readonly: true, value: fmt(v, 6), "aria-label": k }), { plain: false }))] : null,
-    h("div.pnote", {}, S.units === "SI" ? "Values are shown as the template defines them; units in the fields come from the template's help text." : "Dimensionless display is a preview: conversion arrives with the project file. Values are shown as the template defines them."));
+      derived.map(([k, v]) => prow(k, h("input.inp", { readonly: true, value: fmt(v, 6), "aria-label": k }), { plain: false }))] : null);
 }
 
 /** Called after any parameter edit (step pages or the Data tab). */
@@ -754,7 +756,7 @@ app.paramsChanged = (d) => {
   for (const b of $$(".step-count")) {
     const n = rowsOf(app, d, b.dataset.step).filter((r) => r.changed).length;
     b.hidden = !n;
-    b.textContent = `${n} changed`;
+    b.textContent = `${n} changed from template`;
   }
   if (typeof d._onParams === "function" && d.wb === "study") d._onParams();
 };
@@ -777,7 +779,7 @@ function renderViewTab(d, body) {
   const dr = fv.displayRange;
   const lo = h("input.inp", { type: "text", value: fmt(dr.lo, 4), "aria-label": "Range minimum", inputmode: "decimal" });
   const hi = h("input.inp", { type: "text", value: fmt(dr.hi, 4), "aria-label": "Range maximum", inputmode: "decimal" });
-  const applyRange = () => { if (!fv.setManualRange(parseFloat(lo.value), parseFloat(hi.value))) { lo.classList.add("invalid"); hi.classList.add("invalid"); status("Range: enter two numbers (positive for log scale)"); } };
+  const applyRange = () => { if (!fv.setManualRange(parseFloat(lo.value), parseFloat(hi.value))) { lo.classList.add("invalid"); hi.classList.add("invalid"); status("Enter two numbers for the range (both positive for a log scale)"); } };
   for (const x of [lo, hi]) { x.addEventListener("change", applyRange); x.addEventListener("keydown", (e) => e.key === "Enter" && applyRange()); }
   const vecs = [["none", "none"], ...Object.keys(fv.mesh.vectors).map((v) => [v, `arrows of ${prettyName(v)}`])];
   const src = colormapSource();
@@ -786,7 +788,7 @@ function renderViewTab(d, body) {
     prow("Field", sel(fields, name, (v) => fv.selectField(v), "Field")),
     prow("Colormap", sel(maps, fv.cmapName, (v) => fv.setColormap(v), "Colormap")),
     prow("", chk(fv.reversed, (v) => fv.setReversed(v), "Reverse colormap")),
-    src.fallback ? h("div.pnote", { text: `Using built-in colormaps: ${src.reason}.` }) : null,
+    src.fallback ? h("div.pnote", { text: `Using built-in colormaps (${src.reason}).` }) : null,
     h("div.pgroup", { text: "Range" }),
     prow("Mode", sel([["auto", "automatic, all nodes"], ["view", "automatic, visible area"], ["manual", "manual"]], fv.range.mode, (v) => fv.setRangeMode(v), "Range mode")),
     prow("Minimum", lo), prow("Maximum", hi),
@@ -842,15 +844,18 @@ function docLabel(d) {
 }
 
 const DEFAULT_MESH = { density: 1, boundaries: [], regions: [], corners: { enabled: false, size: 0, radius: 0, max_angle: 80 }, paint: [], paint_growth: 1.2 };
-const DEFAULT_TIME = { save: { mode: "template", dtau: 0.05, n: 20, tau_min: 1e-4, list: [] }, dt_max: null, max_rejects: 12 };
+const DEFAULT_TIME = { save: { mode: "uniform", by: "count", n_lin: 100, dtau: 0.05, n: 20, tau_min: 1e-4, list: [] }, dt_max: null, max_rejects: 12 };
 
 /** Fill missing blocks of a case.json (same defaults as pnpflow/project.py). */
 function normalizeCase(c) {
   c = Object.assign({ params: {}, units: {}, figures: { standard: true }, next_run_name: null }, c || {});
+  c.bcs = Object.assign({}, c.bcs || {});              // conditions changed from the template (bceditor.js)
   c.mesh = Object.assign(structuredClone(DEFAULT_MESH), c.mesh || {});
   c.mesh.corners = Object.assign(structuredClone(DEFAULT_MESH.corners), (c.mesh && c.mesh.corners) || {});
   c.time = Object.assign(structuredClone(DEFAULT_TIME), c.time || {});
-  c.time.save = Object.assign(structuredClone(DEFAULT_TIME.save), (c.time && c.time.save) || {});
+  const given = (c.time && c.time.save) || {};
+  const legacy = given.mode === "uniform" && !("by" in given) ? { by: "dtau" } : {};   // files written before "by"
+  c.time.save = Object.assign(structuredClone(DEFAULT_TIME.save), legacy, given);
   return c;
 }
 app.normalizeCase = normalizeCase;
@@ -862,20 +867,20 @@ function uniqueCaseName(base) {
 }
 
 /** New case from a template (or from a run's inputs): case.json is written at once. */
-app.newCase = async (template, { params = null, name = null, from = "" } = {}) => {
+app.newCase = async (template, { params = null, bcs = null, name = null, from = "" } = {}) => {
   const c = S.cases[template];
   if (!c) { app.toast(`Template '${template}' is not available from run.py`, "error"); return; }
   name = name || uniqueCaseName(template);
-  const data = normalizeCase({ template, description: from, params: Object.assign({}, c.params || {}, params || {}) });
+  const data = normalizeCase({ template, description: from, params: Object.assign({}, c.params || {}, params || {}), bcs: bcs || {} });
   try {
     await bridge.saveCase(name, data, true);
   } catch (e) {
-    app.toast(`Could not create the case: ${e.message}`, "error");
+    app.toast(`Could not create the project: ${e.message}`, "error");
     return;
   }
   await refreshProjects();
   await app.openCase(name, { wb: "geometry" });
-  status(`New case '${name}' (cases/${name}/case.json). Each step holds its own settings; press Create mesh to check the mesh, then Solve (F8).`);
+  status(`Created case '${name}' in cases/${name}/case.json. Each step page holds its own settings. Press Create mesh to check the mesh, then Solve (F8).`);
 };
 app.openTemplate = (template) => app.newCase(template);
 
@@ -911,7 +916,7 @@ async function loadCaseData(d, { run = null, quiet = false } = {}) {
     d.loading = false;
     if (pick && pick !== d.name) await app.showCaseRun(d, pick, { render: false });
   } catch (e) {
-    d.error = e.status === 404 ? `The case '${d.caseName}' was not found in the cases folder.` : e.message;
+    d.error = e.status === 404 ? `The project '${d.caseName}' was not found in the cases folder.` : e.message;
     d.loading = false;
   }
   if (S.active === d.id) renderAll();
@@ -945,7 +950,9 @@ async function saveCaseNow(d) {
   d.dirty = false;
   try {
     const r = await bridge.saveCase(d.caseName, d.caseData);
-    if (r && r.case && !d.dirty) d.caseData = normalizeCase(r.case);
+    // keep the same object: open editors (mesh tools, time stepping, boundary conditions) hold
+    // parts of it, and the echo only adds the server's name / created / modified stamps
+    if (r && r.case) for (const k of ["name", "created", "modified"]) if (k in r.case) d.caseData[k] = r.case[k];
     d.saveError = null;
   } catch (e) {
     d.saveError = e.message;
@@ -990,7 +997,7 @@ app.deleteMesh = async (d) => {
   }
   d.caseMesh = null; d.caseValidation = undefined; d._repairOpen = false;
   d.caseDetail = await bridge.caseDetail(d.caseName).catch(() => d.caseDetail);
-  app.toast("Mesh deleted. case.json and earlier runs are untouched; create the mesh again when needed.", "ok");
+  app.toast("Mesh deleted. case.json and earlier runs are unchanged. Create the mesh again when you need it.", "ok");
   renderAll();
 };
 
@@ -999,7 +1006,7 @@ app.caseOfRun = async (d) => {
   const proj = (d.listing && d.listing.project) || (app.entryOf(d.name) || {}).project;
   if (proj) return app.openCase(proj, { wb: "study" });
   const inputs = d.summary && d.summary.input;
-  return app.newCase(d.case, { params: inputs, from: `made from the inputs of run ${d.name}` });
+  return app.newCase(d.case, { params: inputs, bcs: d.runCase && d.runCase.bcs, from: `made from the inputs of run ${d.name}` });
 };
 
 function activate(id) {
@@ -1130,11 +1137,11 @@ function renderDocTabs() {
   const bar = $("#doc-tabs");
   setChildren(bar, S.docs.map((d) => {
     const sel = d.id === S.active;
-    const label = d.kind === "start" ? "Start" : docLabel(d);
+    const label = d.kind === "start" ? "Home" : docLabel(d);
     const st = d.kind === "start" ? null : app.statusOf(d);
     const tab = h("div.dtab", {
       role: "tab", tabindex: sel ? "0" : "-1", "aria-selected": String(sel), class: d.kind === "start" ? "start" : "",
-      "data-tip-title": d.kind === "start" ? "Start page" : label, "data-tip": d.kind === "start" ? "Cases, templates, recent runs and examples" : d.kind === "case" ? `Case from ${caseTitle(d.case)}${d.name ? `; showing run ${d.name}` : ""}` : `Result of ${caseTitle(d.case)}${d.listing && d.listing.project ? `, case ${d.listing.project}` : ""}`,
+      "data-tip-title": d.kind === "start" ? "Home" : label, "data-tip": d.kind === "start" ? "Projects, templates, recent runs and examples" : d.kind === "case" ? `Project from ${caseTitle(d.case)}${d.name ? `; showing run ${d.name}` : ""}` : `Result of ${caseTitle(d.case)}${d.listing && d.listing.project ? `, project ${d.listing.project}` : ""}`,
       onclick: (e) => { if (!e.target.closest(".icon-btn")) activate(d.id); },
       onkeydown: (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(d.id); }
@@ -1160,15 +1167,16 @@ function setUnits(u) {
   store.set("units", u);
   renderStatusbar();
   renderProps();
-  status(u === "SI" ? "Units: SI (lab units)" : "Units: dimensionless. This is a preview; conversion arrives with the project file.");
+  renderCanvas();
+  status(u === "SI" ? "Units: SI (lab units, as entered)" : "Units: dimensionless. Values are shown and typed in V_T, a_ref, c0, D and l_p²/D; the stored values do not change.");
 }
 function setExpert(on) {
   S.expert = !!on;
   store.set("expert", S.expert);
   renderStatusbar();
   renderProps();
-  renderCanvasIf(["study"]);
-  status(on ? "Expert mode: every setting, raw names and the command line are shown" : "Beginner mode: explanations are shown next to the settings");
+  renderCanvas();   // names vs keys on every step page, the Newton plot view on Checks
+  status(on ? "Expert mode shows every setting, the raw names and the command line" : "Beginner mode shows explanations next to the settings");
 }
 
 function renderStatusbar() {
@@ -1196,8 +1204,7 @@ function renderStatusbar() {
   const seg = (items, value, onPick, label) => h("span.seg", { role: "group", "aria-label": label },
     items.map(([v, t, tipText]) => h("button", { type: "button", "aria-pressed": String(v === value), "data-tip": tipText, onclick: () => onPick(v) }, t)));
   setChildren($("#sb-controls"),
-    seg([["SI", "SI", "Lab units [U]"], ["dimensionless", "dimensionless", "Scaled units [U]"]], S.units, setUnits, "Units"),
-    h("span.stub-tag", { "data-tip": "Visual stub: the unit toggle does not convert values yet. Conversion arrives with the project file." }, "preview"),
+    seg([["SI", "SI", "Lab units, as entered [U]"], ["dimensionless", "dimensionless", "Scaled by the case's references: potentials / V_T, lengths / a_ref, concentrations / c0, time as τ [U]"]], S.units, setUnits, "Units"),
     h("span.sb-sep"),
     seg([[false, "Beginner", "Explanations next to every setting [X]"], [true, "Expert", "Every setting, raw names, command line [X]"]], S.expert, setExpert, "Experience level"));
 }
@@ -1215,7 +1222,7 @@ function openHelp() {
   const row = (label, ...keys) => h("div.keyrow", {}, h("span", { text: label }), h("span", {}, keys.map((k) => h("kbd", { text: k }))));
   dialogShell(dlg, "help-title", "Keyboard shortcuts", h("div.keys", {},
     h("h3", { text: "Application" }),
-    row("New project from template", "N"), row("Open run", "O"), row("Refresh runs", "R"), row("Filter runs (Start page)", "/"),
+    row("New project from template", "N"), row("Open run", "O"), row("Refresh runs", "R"), row("Filter runs (Home)", "/"),
     row("Next / previous document", "J", "K"), row("Switch dark / light theme", "T"), row("Units SI / dimensionless", "U"), row("Beginner / expert", "X"),
     row("Show / hide the model panel", "["), row("Menu bar", "F10"), row("This help", "?"), row("Close menus and dialogs", "Esc"),
     h("h3", { text: "Construction steps" }),
@@ -1230,9 +1237,9 @@ function openHelp() {
 function openAbout() {
   const dlg = $("#about-dialog");
   dialogShell(dlg, "about-title", "About pnpflow", h("div", {},
-    h("p", { text: "pnpflow: finite elements for Poisson–Nernst–Planck ion transport with optional Stokes / Navier–Stokes flow. Jacobians and sensitivities come from JAX automatic differentiation." }),
-    h("p.dim", { text: `Front end v0.1 (first version). ${inTauri ? "Desktop shell (Tauri 2)." : "Running in a browser against the development server."} Results folder: ${S.resultsDir || "unknown"}.` }),
-    h("p.dim", { text: "Geometry, materials, boundary and physics editing arrive with the project file; today a project is a template plus parameters." })));
+    h("p", { text: "pnpflow solves Poisson–Nernst–Planck ion transport with finite elements, optionally coupled to Stokes or Navier–Stokes flow. Jacobians and sensitivities come from JAX automatic differentiation." }),
+    h("p.dim", { text: `Front end v0.1 (first version). ${inTauri ? "Desktop shell (Tauri 2)." : "Running in a browser on the development server."} Results folder: ${S.resultsDir || "unknown"}.` }),
+    h("p.dim", { text: "Editing geometry, materials, boundaries and physics needs the project file, which is not built yet. Today a case is a template plus parameters." })));
   dlg.showModal();
 }
 
@@ -1245,7 +1252,7 @@ app.solve = async (d, { name, overwrite, msgEl } = {}) => {
     else app.toast(text, kind === "error" ? "error" : kind);
   };
   if (d.kind === "run") { await app.caseOfRun(d); return; }
-  if (!d.case || !S.cases[d.case]) return say("error", d.case ? `Template '${d.case}' is not available from run.py.` : "This document has no template (case) yet. Wait for the run to load or open a template from the Start page.");
+  if (!d.case || !S.cases[d.case]) return say("error", d.case ? `Template '${d.case}' is not available from run.py.` : "This document has no template yet. Wait for the run to load, or open a template from Home.");
   if (d.invalid && Object.keys(d.invalid).length) return say("error", `Fix the highlighted parameters first: ${Object.keys(d.invalid).join(", ")}.`);
   name = (name || app.nextNameOf(d) || app.suggestName(d)).trim();
   if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(name)) return say("error", "Run names use letters, digits, '_', '.' and '-' only, and start with a letter, digit or '_'.");
@@ -1298,7 +1305,8 @@ app.stop = async (d) => {
 // Polling
 // ---------------------------------------------------------------------------
 function startSignature() {
-  return S.runs.map((r) => `${r.name}:${r.state}:${r.converged}:${r.thumb}:${r.checks}`).join("|") + `#${Object.keys(S.cases).length}`;
+  return S.runs.map((r) => `${r.name}:${r.state}:${r.converged}:${r.thumb}:${r.checks}:${isStale(r)}`).join("|") + `#${Object.keys(S.cases).length}`
+    + `#${S.projectsLoaded}:` + (S.projects || []).map((c) => `${c.name}:${c.mtime}:${(c.mesh || {}).state}:${c.runs.length}`).join("|");
 }
 
 async function refreshProjects() {
@@ -1308,8 +1316,10 @@ async function refreshProjects() {
     S.casesDir = r.dir || S.casesDir;
     S.projectsLoaded = true;
   } catch { /* the run list reports the connection state */ }
+  if (app.activeDoc().kind === "start" && startSignature() !== S.startSig) renderCanvas();
 }
 app.refreshProjects = refreshProjects;
+app.refreshRuns = () => refreshRuns();
 
 async function refreshRuns() {
   refreshProjects();
@@ -1330,7 +1340,7 @@ function setConn(ok, why) {
   const c = $("#conn");
   c.className = `conn ${ok ? "ok" : "off"}`;
   $(".conn-text", c).textContent = ok ? (inTauri ? "Local" : "Server connected") : "Server unreachable";
-  c.dataset.tip = ok ? `Results: ${S.resultsDir}` : `The app cannot reach its backend (${why || "no answer"}). Start it with: python app/server.py`;
+  c.dataset.tip = ok ? `Results: ${S.resultsDir}` : `The app cannot reach its server (${why || "no answer"}). Start it with: python app/server.py`;
 }
 
 async function poll() {
@@ -1353,7 +1363,7 @@ async function poll() {
     await loadRunData(d, { quiet: true });
     const e = app.entryOf(d.name);
     const ok = e && e.state === "done";
-    app.toast(ok ? `${d.name} finished${d.summary && d.summary.solver && d.summary.solver.converged === false ? " but did not converge" : ""}` : `${d.name} failed; see the log`, ok ? "ok" : "error");
+    app.toast(ok ? `${d.name} finished${d.summary && d.summary.solver && d.summary.solver.converged === false ? " but did not converge" : ""}` : `${d.name} failed. See the log`, ok ? "ok" : "error");
     if (ok && S.active === d.id && d.wb === "study") { d.wb = "results"; d.rview = "field"; }
     if (S.active === d.id) { renderAll(); syncURL(); }
   }
@@ -1402,17 +1412,19 @@ app.loadCases = async (force = false) => {
 };
 
 // ---------------------------------------------------------------------------
-// URL state: ?run=<name>&wb=<wb>&view=<results view>&new=<case>&ptab=view|data&theme=light
+// URL state: ?run=<name>&wb=<wb>&view=<results view>&new=<case>&b=<boundary>&ptab=view|data&theme=light
 // ---------------------------------------------------------------------------
+app.syncURL = () => syncURL();
 function syncURL() {
   const d = app.activeDoc();
   const u = new URL(location.href);
-  for (const k of ["run", "wb", "view", "new", "doc", "case"]) u.searchParams.delete(k);
+  for (const k of ["run", "wb", "view", "new", "doc", "case", "b"]) u.searchParams.delete(k);
   if (d.kind !== "start") {
     if (d.kind === "case") u.searchParams.set("case", d.caseName);
     else if (d.name) u.searchParams.set("run", d.name); else u.searchParams.set("new", d.case);
     u.searchParams.set("wb", d.wb);
     if (d.wb === "results") u.searchParams.set("view", d.rview);
+    if (d.wb === "boundaries" && d.bSel) u.searchParams.set("b", d.bSel);
   }
   u.searchParams.set("ptab", S.ptab);
   if (u.href !== location.href) history.replaceState(null, "", u);
@@ -1421,11 +1433,13 @@ function syncURL() {
 async function applyURL() {
   const q = new URLSearchParams(location.search);
   if (q.get("ptab") === "view" || q.get("ptab") === "data") S.ptab = q.get("ptab");
+  if (q.get("units") === "SI" || q.get("units") === "dimensionless") S.units = q.get("units");   // shareable view, not stored
   const wb = WB.some((w) => w.id === q.get("wb")) ? q.get("wb") : null;
   const view = RESULT_VIEWS.some((v) => v.id === q.get("view")) ? q.get("view") : null;
   if (q.get("case")) {
     const d = await app.openCase(q.get("case"), { wb: wb || (view ? "results" : null) });
     if (d && view) d.rview = view;
+    if (d && q.get("b")) { d.bSel = q.get("b"); renderAll(); }
   } else if (q.get("run")) await app.openRun(q.get("run"), { wb: wb || (view ? "results" : null), rview: view });
   else if (q.get("new")) {
     app.openTemplate(q.get("new"));
@@ -1537,7 +1551,7 @@ async function init() {
   if (mi >= 0) setTimeout(() => openMenu(mi, true), 300);
   if (q.get("dialog") === "help") openHelp();
   if (q.get("dialog") === "about") openAbout();
-  if (!window.Plotly) app.toast("Charts are unavailable: vendor/plotly.min.js did not load", "error");
+  if (!window.Plotly) app.toast("Charts are unavailable because vendor/plotly.min.js did not load", "error");
   if (S.cmSource.fallback) status(`Using built-in colormaps (${S.cmSource.reason})`);
 }
 

@@ -24,7 +24,6 @@ model), so solver.Newton is reused unchanged.
 import time
 
 import numpy as np
-import scipy.sparse as sp
 import jax
 import jax.numpy as jnp
 
@@ -77,14 +76,10 @@ class TransientAssembler:
         return self._residual(U, params, self.Ustar, self.a0)
 
     def jacobian(self, U, params):
-        data = np.asarray(self.asm.jacobian_values(U, params) + self.a0 * self.mass_data)
-        n = self.model.ndof
-        return sp.csr_matrix((data, self.asm.csr_cols, self.asm.indptr), shape=(n, n))
+        return self.asm.csr(self.asm.jacobian_values(U, params) + self.a0 * self.mass_data)
 
     def mass_matrix(self):
-        n = self.model.ndof
-        return sp.csr_matrix((np.asarray(self.mass_data), self.asm.csr_cols,
-                              self.asm.indptr), shape=(n, n))
+        return self.asm.csr(self.mass_data)
 
 
 def bdf_coefficients(dt, dt_prev):
@@ -99,8 +94,12 @@ def bdf_coefficients(dt, dt_prev):
 
 def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None,
               rtol=1e-3, w_max=2.0, max_rejects=12, on_output=None, on_step=None,
-              log=print, consistent_init=True, on_accept=None, err_scale="abs"):
+              log=print, consistent_init=True, on_accept=None, err_scale="abs",
+              clock_text=None):
     """Adaptive BDF2 from t = 0 to t_end.
+
+    clock_text: optional f(t, dt) -> str for the log lines (e.g. real time and tau beside
+                the solver time); default "t <t>  dt <dt>" in solver units
 
     outputs   : times at which on_output(t, U) is called (hit exactly)
     rtol      : target for |U - U_pred|_inf over the species and phi dofs, with
@@ -117,6 +116,7 @@ def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None
                 concentrations at high potentials, c ~ exp(Phi)).
     Returns (U, t, steps, ok).
     """
+    clock = clock_text or (lambda t, dt: f"t {t:.6g}  dt {dt:.3g}")
     m = tasm.model
     watch = np.arange((m.S + 1) * m.n)              # species + phi dofs
     dt_max = dt_max or t_end / 20
@@ -186,10 +186,10 @@ def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None
             rejects += 1
             rejects_total += 1
             if rejects > max_rejects:
-                log(f"time step failed at t = {t:.6g} (dt = {dt_try:.3g})")
+                log(f"time step failed at {clock(t, dt_try)}")
                 return U, t, steps, False
             dt_try *= 0.25 if not ok else 0.5
-            log(f"  reject step: converged={ok} err={err} -> dt {dt_try:.3g}")
+            log(f"  reject step: converged={ok} err={err} -> {clock(t, dt_try)}")
 
         U_prev, U = U, U_new
         dt_prev = dt_try
@@ -197,7 +197,7 @@ def integrate(newton, tasm, U0, params, t_end, outputs=(), dt0=1e-2, dt_max=None
         steps.append({"t": t, "dt": dt_try, "newton_its": len(hist) - 1,
                       "err": err, "rejects": rejects,
                       "res_final": hist[-1]["res_norm"]})
-        log(f"step {len(steps):4d}  t {t:.6g}  dt {dt_try:.3g}  "
+        log(f"step {len(steps):4d}  {clock(t, dt_try)}  "
             f"its {len(hist) - 1}  err {err if err is None else f'{err:.2e}'}")
         if on_accept is not None:
             on_accept(t, U)

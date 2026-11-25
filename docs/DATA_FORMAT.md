@@ -28,6 +28,7 @@ Live-status keys (optional; `null` until the first Newton iteration):
 | `tells.alpha` | last line-search step length (`null` at iteration 0) |
 | `tells.min_c` | minimum concentration over all species nodes (`null` with no species) |
 | `tells.halvings` | continuation step halvings so far in the current target |
+| `pid` | process id of the solver writing the file (2026-11-24). The app server checks it is still a live `run.py`, so a run interrupted outside the app shows "stopped updating" instead of live progress. Older files lack it. |
 
 Time-dependent runs (optional keys, only when the case sets `Setup.transient`):
 
@@ -35,7 +36,7 @@ Time-dependent runs (optional keys, only when the case sets `Setup.transient`):
 |---|---|
 | `fraction` | simulated time `t / t_end` (not wall time; steps grow as the run goes) |
 | `health` | `converging` after an accepted step, `struggling` after a rejected one, `failed` |
-| `time` | `{t, t_end, tau, tau_end, dt, step, rejects}`: solver time, the case's time unit (`tau = t / t_per_tau`), last step, accepted steps, rejected steps |
+| `time` | `{t, t_end, tau, tau_end, dt, step, rejects}`: solver time, the case's time unit (`tau = t / t_per_tau`), last step, accepted steps, rejected steps. Optional `t_s`, `t_end_s` (2026-11-24): real time in seconds, when the template gives `transient.s_per_tau` (pore: l_p² / D); the app's time bar and `stdout.log` show it ("t 1.868 µs  tau 0.0025 (solver t 24.98)") |
 | `tells.dt`, `tells.newton_its`, `tells.err`, `tells.rejects` | last step size, its Newton iterations, its change-vs-extrapolation estimate, total rejections |
 | `history` | Newton iterations of every step (`stage` = step number) |
 
@@ -74,7 +75,9 @@ Post-processing keys (optional, added 2026-11-21):
 | `model.coord` | `"planar"` or `"axisym"` |
 | `figures` | names of the house-style figures in `figures/` and `svg/` (no extension) |
 | `mesh_views` | `[{"file": "mesh/view_a.png", "title": "...", "what_to_check": "..."}, ...]` — always two views |
+| `checks[].optional`, `value_text`, `limit_text` | optional keys a check may carry: `optional: true` leaves it out of the run verdict ("Converged · N warnings"), the texts replace the numbers in the app. The app already treats `steady equilibrium solve` and `post-processing: …` as optional and words the known flag/count checks (`app/ui/js/pages.js` `CHECK_WORDS`, `app/api.py` `_optional_check`) |
 | `mesh_checks` | the full mesh diagnose list (same check shape, plus `fix`) |
+| `template_boundaries` | (2026-11-24) only when the case set conditions (`case.json` `bcs`): the template's own conditions, same shape as `model.boundaries`, which then holds the conditions used. The app shows `template_boundaries` + the case's current `bcs` |
 
 `checks` gains one roll-up entry `"mesh diagnose"` (`value` = number of failures, `status` =
 worst status, `"group": "mesh"`). A broken post-processing step adds a `warn` check with
@@ -132,7 +135,7 @@ Time-dependent runs also add to `summary.json` (optional): `transient` =
 `{scheme, t_end, t_reached, t_per_tau, n_steps, steps: [{t, dt, newton_its, err, rejects,
 res_final}], output_times}`, `solver.equilibrium` = `{converged, newton_its}`,
 `integrals.charging` (pore case: `tau`, `mu_pore_avg`, `mu_Z05`, `Q_pore_per_rad`), and
-`fields_time.json` = `{t, tau, t_per_tau, n_nodes, fields: {c+, c-, rho, phi: [one array per output time]}}` (one value per P2 node like `fields.json`; drives the app's time slider; `tools/export_fields_time.py` writes it for older runs). `solution.npz` holds `t` and `U_t` (snapshot per output time). Every run records `device`
+`fields_time.json` = `{t, tau, t_per_tau, n_nodes, fields: {c+, c-, rho, phi: [one array per output time]}, play?}` (optional `play`: indices of the snapshots on the case's saved-time grid, without extra required times; the app's Play steps through these, else through all) (one value per P2 node like `fields.json`; drives the app's time slider; `tools/export_fields_time.py` writes it for older runs). `solution.npz` holds `t` and `U_t` (snapshot per output time). Every run records `device`
 = `{platform, devices}` (the JAX backend it ran on); `progress.json` carries the same `device` as soon as the run starts (the app shows a green/red dot from it).
 
 ## csv/*.csv  (every run, from profiles.json + summary.json)
@@ -163,7 +166,8 @@ For gmsh / ParaView. Not read by the app.
 ## Launching runs
 `python run.py <case> --name <run_name> --set key=value --set key2=value2`
 (`JAX_PLATFORMS=cuda|cpu` picks the device; the servers' `/api/launch` takes
-`device: auto|gpu|cpu` and sets it.)
+`device: cpu|auto|gpu`, default `cpu`, and sets it. `run.py` uses all logical CPUs but one;
+`PNPFLOW_THREADS=n` overrides.)
 `python run.py --list` prints the cases and their default params as JSON:
 `{"cylinder": {"params": {...}, "info": {...}}, ...}`
 
@@ -190,7 +194,9 @@ cases/<case>/results/<run>/        a run (all files above) + case.json (frozen c
           "corners": {"enabled": true, "size": 0, "radius": 0, "max_angle": 80},
           "paint": [{"x": 0.9, "y": 0.1, "r": 0.1, "size": 0.02}], "paint_growth": 1.2},
  "time": {"save": {"mode": "template|uniform|log|list", "dtau": 0.05, "n": 20, "tau_min": 1e-4, "list": []},
-          "dt_max": null, "max_rejects": 12}}
+          "dt_max": null, "max_rejects": 12},
+ "bcs": {"pore_wall": {"phi": {"type": "stern", "coef": 0.8, "ref": 75, "unit": "mV"}},
+         "sdl_side": {"c": {"type": "bulk"}}}}
 ```
 Lengths in `mesh` are model coordinates (the template's length unit, e.g. a_ref for the pore).
 `params` are in the template's units; `units` only changes how the app shows them. Missing
@@ -198,6 +204,15 @@ blocks take the defaults of `pnpflow/project.py`. `density` scales every element
 1/density. Refinements grow from `size` with ratio `growth` until the template's own size is
 smaller. `corners` refines geometry corners whose interior angle is below `max_angle` or above
 185° (re-entrant); size 0 = radius / 8, radius 0 = 2 % of the domain diagonal.
+
+`bcs` (optional, 2026-11-24, Boundaries page editor) holds only the conditions changed from the
+template; a missing boundary or key keeps the template's. `c`: `blocking` (no flux), `bulk`,
+`fixed` (`value` = c / c_bulk for every ion), `flux` (`value` = outward N·n). `phi`: `natural` (no
+charge), `fixed` (`value`), `stern` (`coef` = C, `ref` = metal potential), `charge` (`sigma`).
+Potentials carry `unit`: `"mV"` (converted with the template's `T`, 298.15 K without one) or
+`"V_T"` (already Φ). Flow conditions cannot be set yet. `runner.apply_case_bcs` turns each value
+into a parameter `bc_<boundary>_<field>` that ramps from rest (0, or bulk) with the template's
+first continuation stage. Check: `tools/check_case_bcs.py`.
 
 The mesh key (`project.mesh_key`) hashes the template, the `mesh` block and the geometry, mesh and
 materials parameters (`project.STEP_RULES`); changing time, boundary or physics settings keeps
